@@ -289,8 +289,21 @@ export const PixelEditor = React.forwardRef<PixelEditorHandle, Props>(function P
     const [x, y] = posFromEvent(e);
     const [sx, sy] = startPt.current ?? [x, y];
     if (tool === "pencil" || tool === "eraser") {
+      // True single-pixel paint — never touches neighbours unless you move there.
+      // We intentionally DO NOT interpolate a Bresenham line between previous and current,
+      // because that was causing “I painted one pixel and others changed” when the pointer
+      // moved even 1 CSS pixel (which can cross a logical pixel boundary at low zoom).
+      // If you need a continuous stroke, just keep dragging — each pointer event paints exactly
+      // the pixel under the cursor.
+      if (x < 0 || y < 0 || x >= width || y >= height) return;
       const img = ctx.getImageData(0, 0, width, height);
-      drawLinePixels(img, sx, sy, x, y, tool === "eraser" ? null : hexToRgbaLocal(color));
+      const i = (y * width + x) * 4;
+      if (tool === "eraser") {
+        img.data[i + 3] = 0;
+      } else {
+        const [r, g, b, a] = hexToRgbaLocal(color);
+        img.data[i] = r; img.data[i + 1] = g; img.data[i + 2] = b; img.data[i + 3] = a;
+      }
       ctx.putImageData(img, 0, 0);
       startPt.current = [x, y];
       render();
