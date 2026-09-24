@@ -131,8 +131,8 @@ export function Skin3D({
   onPaintStart,
   onPaintEnd,
 }: Props) {
-  const [yaw, setYaw] = useState(-24);
-  const [pitch, setPitch] = useState(-8);
+  const [yaw, setYaw] = useState(-18);
+  const [pitch, setPitch] = useState(0);
   const [zoom, setZoom] = useState(1);
   const drag = React.useRef<{ x: number; y: number; yaw: number; pitch: number } | null>(null);
   const isPainting = paintMode && !!onPaint;
@@ -206,7 +206,7 @@ export function Skin3D({
     <div className="flex flex-col gap-2">
       <div
         className={`relative mx-auto w-full max-w-105 overflow-hidden rounded-md border ${isPainting ? "cursor-crosshair" : "cursor-grab active:cursor-grabbing"} border-slate-200 bg-slate-100 dark:border-slate-700 dark:bg-slate-950`}
-        style={{ height: 380, perspective: 900 }}
+        style={{ height: 380, perspective: 1200 }}
         onPointerDown={(e) => {
           if (isPainting) {
             onPaintStart?.();
