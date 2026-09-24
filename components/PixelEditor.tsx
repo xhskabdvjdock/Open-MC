@@ -342,14 +342,15 @@ export const PixelEditor = React.forwardRef<PixelEditorHandle, Props>(function P
     const [x, y] = posFromEvent(e);
     const [sx, sy] = startPt.current ?? [x, y];
     if (tool === "pencil" || tool === "eraser") {
-      // Brush-aware freehand: we interpolate a 1px-step Bresenham line between previous
-      // and current so a fast drag never leaves gaps, but each step paints ONLY the
-      // square brush (size × size) centred on that step — so pixels you never hovered
-      // over never change. Whole stroke is locked to the color captured at pointerDown.
+      // Strict single-pixel: only the exact pixel(s) under the cursor change.
+      // We do NOT interpolate a line between previous and current — that was the
+      // “glow / other pixels change while holding” bug. If you move fast and want
+      // a continuous stroke, move a bit slower or use the Line tool for straight lines.
       if (x < 0 || y < 0 || x >= width || y >= height) return;
+      if (sx === x && sy === y) return; // same logical pixel as last event — nothing to do
       const rgba = strokeIsEraser.current ? null : strokeColor.current;
       const img = ctx.getImageData(0, 0, width, height);
-      bresenhamLine(sx, sy, x, y, (bx, by) => paintBrush(img, bx, by, brushSize, rgba));
+      paintBrush(img, x, y, brushSize, rgba);
       ctx.putImageData(img, 0, 0);
       startPt.current = [x, y];
       render();
