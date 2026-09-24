@@ -151,18 +151,17 @@ export const PixelEditor = React.forwardRef<PixelEditorHandle, Props>(function P
     const src = dataRef.current;
     const view = viewRef.current;
     if (!src || !view) return;
-    const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
     const cssW = width * zoom;
     const cssH = height * zoom;
-    // backing store sized for DPR so retina stays razor-sharp
-    view.width = Math.round(cssW * dpr);
-    view.height = Math.round(cssH * dpr);
+    // No DPR transform — keep 1 CSS px = 1 canvas px so scaled pixels never have sub-pixel gaps.
+    // Browser will handle retina upscaling via CSS + `image-rendering: pixelated` (global .pixel).
+    view.width = cssW;
+    view.height = cssH;
     view.style.width = `${cssW}px`;
     view.style.height = `${cssH}px`;
     const vctx = view.getContext("2d")!;
-    vctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     vctx.imageSmoothingEnabled = false;
-    // checkerboard for transparency — drawn at CSS pixels so pattern stays consistent
+    // checkerboard for transparency
     vctx.fillStyle = "#ffffff";
     vctx.fillRect(0, 0, cssW, cssH);
     vctx.fillStyle = "#d4d4d4";
@@ -173,7 +172,7 @@ export const PixelEditor = React.forwardRef<PixelEditorHandle, Props>(function P
         vctx.fillRect(x + cell, y + cell, cell, cell);
       }
     }
-    // true pixel — nearest-neighbor only, true colors, alpha kept
+    // true pixel — nearest-neighbor, true colors
     vctx.drawImage(src, 0, 0, cssW, cssH);
     if (grid && zoom >= 4) {
       vctx.strokeStyle = "rgba(0,0,0,0.22)";
