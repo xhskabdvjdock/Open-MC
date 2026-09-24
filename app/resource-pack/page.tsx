@@ -2,17 +2,22 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import JSZip from "jszip";
 import {
-  Folder, File as FileIcon, Image as ImageIcon, Music, Braces, Download, Trash2,
-  Pencil, Plus, Replace, Save, ChevronRight, PackageOpen, FileUp, X,
+  Folder, FolderOpen, File as FileIcon, Image as ImageIcon, Music, Braces,
+  Download, Trash2, Pencil, Plus, Save, ChevronRight, ChevronDown,
+  PackageOpen, FileUp, Copy, ShieldCheck, Search, X, FilePlus2,
 } from "lucide-react";
 import { useApp } from "@/components/Providers";
 import { Dropzone } from "@/components/Dropzone";
 import { PixelEditor, type PixelEditorHandle } from "@/components/PixelEditor";
 import { ModelPreview, type McModel } from "@/components/ModelPreview";
+import { Btn, IconBtn, ContextMenu, type CtxItem, Resizer, StatusBar, EmptyState } from "@/components/ui";
 import { loadZipSafely, sanitizeZipPath, sniffAudio } from "@/lib/zip-safety";
 import { packFormatForVersion } from "@/lib/versions";
-import { loadImage, formatBytes, downloadBlob, canvasToBlob, blobToDataUrl } from "@/lib/pixel-utils";
-import { saveProject, uid } from "@/lib/storage";
+import { validatePack } from "@/lib/validate-pack";
+import { loadImage, formatBytes, downloadBlob } from "@/lib/pixel-utils";
+import { saveProject, getProject, uid } from "@/lib/storage";
+import { consumeNewProject } from "@/components/NewProjectDialog";
+import { consumeOpenProject } from "@/lib/projects";
 
 type FilesMap = Map<string, Uint8Array>;
 
@@ -25,13 +30,51 @@ function baseOf(path: string): string {
   return i < 0 ? path : path.slice(i + 1);
 }
 
+interface TreeNode {
+  name: string;
+  path: string; // "" for root
+  dirs: TreeNode[];
+  files: string[];
+}
+
+function buildTree(paths: string[]): TreeNode {
+  const root: TreeNode = { name: "", path: "", dirs: [], files: [] };
+  const dirMap = new Map<string, TreeNode>([["", root]]);
+  const ensure = (dir: string): TreeNode => {
+    const hit = dirMap.get(dir);
+    if (hit) return hit;
+    const parent = ensure(dirOf(dir));
+    const node: TreeNode = { name: baseOf(dir), path: dir, dirs: [], files: [] };
+    parent.dirs.push(node);
+    dirMap.set(dir, node);
+    return node;
+  };
+  for (const p of paths) {
+    const d = dirOf(p);
+    ensure(d).files.push(p);
+  }
+  const sortNode = (n: TreeNode) => {
+    n.dirs.sort((a, b) => a.name.localeCompare(b.name));
+    n.files.sort((a, b) => baseOf(a).localeCompare(baseOf(b)));
+    n.dirs.forEach(sortNode);
+  };
+  sortNode(root);
+  return root;
+}
+
+function fileIcon(path: string): React.ElementType {
+  if (/\.png$/i.test(path)) return ImageIcon;
+  if (/\.(ogg|wav|mp3)$/i.test(path)) return Music;
+  if (/\.json$/i.test(path) || path === "pack.mcmeta") return Braces;
+  return FileIcon;
+}
+
 export default function ResourcePackPage() {
-  const { notify, mcVersion, autosave } = useApp();
+  const { notify, mcVersion, autosave, showGrid, setProject } = useApp();
   const [packName, setPackName] = useState("MyPack");
   const [files, setFiles] = useState<FilesMap>(new Map());
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState("");
-  const [currentDir, setCurrentDir] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
   const [mcmetaText, setMcmetaText] = useState("");
   const [mcmetaError, setMcmetaError] = useState("");
@@ -43,68 +86,75 @@ export default function ResourcePackPage() {
   const [editingImg, setEditingImg] = useState<HTMLImageElement | null>(null);
   const [editKey, setEditKey] = useState(0);
   const [dirty, setDirty] = useState(false);
+  const [zoom, setZoom] = useState(8);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set(["assets", "assets/minecraft"]));
+  const [treeQuery, setTreeQuery] = useState("");
+  const [ctx, setCtx] = useState<{ x: number; y: number; path: string; isDir: boolean } | null>(null);
+  const [uploadDir, setUploadDir] = useState("");
+  const [explorerW, setExplorerW] = useState(264);
+  const [propsW, setPropsW] = useState(248);
+  const [quickReport, setQuickReport] = useState<string | null>(null);
+  const [isDesktop, setIsDesktop] = useState(false);
   const editorRef = useRef<PixelEditorHandle>(null);
-  const editedFlag = useRef(false);
-
-  const fileList = useMemo(() => [...files.keys()].sort(), [files]);
-
-  const dirs = useMemo(() => {
-    const set = new Set<string>();
-    for (const p of fileList) {
-      const d = dirOf(p);
-      const parts = d ? d.split("/") : [];
-      let acc = "";
-      for (const part of parts) {
-        acc = acc ? acc + "/" + part : part;
-        set.add(acc);
-      }
-    }
-    return [...set].sort();
-  }, [fileList]);
-
-  const crumbs = useMemo(() => (currentDir ? currentDir.split("/") : []), [currentDir]);
-
-  const visible = useMemo(() => {
-    const subdirs = dirs.filter((d) => dirOf(d) === currentDir).map((d) => baseOf(d));
-    const items = fileList.filter((f) => dirOf(f) === currentDir);
-    return { subdirs, items };
-  }, [dirs, fileList, currentDir]);
+  const zipInput = useRef<HTMLInputElement>(null);
+  const addInput = useRef<HTMLInputElement>(null);
 
   const markDirty = useCallback(() => setDirty(true), []);
+  const fileList = useMemo(() => [...files.keys()].sort(), [files]);
+  const totalBytes = useMemo(() => [...files.values()].reduce((a, b) => a + b.length, 0), [files]);
+  const tree = useMemo(() => buildTree(fileList), [fileList]);
+
+  const filtered = useMemo(() => {
+    const q = treeQuery.trim().toLowerCase();
+    if (!q) return null;
+    return fileList.filter((f) => f.toLowerCase().includes(q)).slice(0, 200);
+  }, [treeQuery, fileList]);
+
+  // ---- responsive: fixed pane widths on desktop only (set after mount, SSR-safe) ----
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 1024px)");
+    const apply = () => setIsDesktop(mq.matches);
+    apply();
+    mq.addEventListener("change", apply);
+    return () => mq.removeEventListener("change", apply);
+  }, []);
 
   // ---- import ----
-  const importZip = useCallback(async (uploads: File[]) => {
-    const f = uploads[0];
-    if (!f) return;
-    if (!/\.zip$/i.test(f.name)) { notify("Only .zip resource packs are supported.", "err"); return; }
+  const importBlob = useCallback(async (blob: Blob, name: string) => {
     setBusy("Reading archive…");
     try {
-      const { entries } = await loadZipSafely(f);
+      const { entries } = await loadZipSafely(blob);
       const next: FilesMap = new Map();
       for (const e of entries) {
         if (e.dir) continue;
-        const bytes = await e.getData();
-        next.set(e.path, bytes);
+        next.set(e.path, await e.getData());
       }
       setFiles(next);
-      setPackName(f.name.replace(/\.zip$/i, "") || "MyPack");
-      setCurrentDir("");
+      setPackName(name || "MyPack");
       setSelected(null);
       setLoaded(true);
       const mc = next.get("pack.mcmeta");
       if (mc) setMcmetaText(new TextDecoder().decode(mc));
       else {
         const fmt = packFormatForVersion(mcVersion);
-        setMcmetaText(JSON.stringify({ pack: { pack_format: fmt, description: `${f.name.replace(/\.zip$/i, "")} — made with Open MC` } }, null, 2));
+        setMcmetaText(JSON.stringify({ pack: { pack_format: fmt, description: `${name} — made with Open MC` } }, null, 2));
       }
+      setQuickReport(null);
       notify(`Imported ${next.size} files`);
-      markDirty();
+      setDirty(true);
     } catch (e) {
       notify(e instanceof Error ? e.message : "Invalid Resource Pack", "err");
     } finally {
       setBusy("");
     }
   }, [markDirty, mcVersion, notify]);
+
+  const importZip = useCallback(async (uploads: File[]) => {
+    const f = uploads[0];
+    if (!f) return;
+    if (!/\.zip$/i.test(f.name)) { notify("Only .zip resource packs are supported.", "err"); return; }
+    await importBlob(f, f.name.replace(/\.zip$/i, ""));
+  }, [importBlob, notify]);
 
   const newBlankPack = useCallback(() => {
     const fmt = packFormatForVersion(mcVersion);
@@ -114,12 +164,49 @@ export default function ResourcePackPage() {
     setFiles(next);
     setMcmetaText(mc);
     setPackName("MyPack");
-    setCurrentDir("");
     setSelected(null);
     setLoaded(true);
+    setQuickReport(null);
     markDirty();
     notify("Blank pack created");
   }, [markDirty, mcVersion, notify]);
+
+  // ---- project indicator ----
+  useEffect(() => {
+    if (loaded) setProject({ name: packName, kind: "Resource Pack", dirty });
+    else setProject(null);
+  }, [loaded, packName, dirty, setProject]);
+  useEffect(() => () => setProject(null), [setProject]);
+
+  // ---- seeds: new blank project / reopen saved project ----
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      const seedName = consumeNewProject("resource-pack");
+      if (seedName && live) {
+        const fmt = packFormatForVersion(mcVersion);
+        const mc = JSON.stringify({ pack: { pack_format: fmt, description: `${seedName} — made with Open MC` } }, null, 2);
+        const next: FilesMap = new Map();
+        next.set("pack.mcmeta", new TextEncoder().encode(mc));
+        setFiles(next);
+        setMcmetaText(mc);
+        setPackName(seedName);
+        setLoaded(true);
+        setDirty(true);
+        notify(`Project "${seedName}" created`);
+        return;
+      }
+      const openId = consumeOpenProject("resource-pack");
+      if (openId && live) {
+        const rec = await getProject(openId);
+        if (rec && typeof rec.data === "object" && live) {
+          await importBlob(rec.data as Blob, rec.name.replace(/\.zip$/i, ""));
+        }
+      }
+    })();
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mcVersion, importBlob, notify]);
 
   // ---- selection ----
   const openPath = useCallback(async (path: string) => {
@@ -140,7 +227,7 @@ export default function ResourcePackPage() {
         setImgDims([img.naturalWidth, img.naturalHeight]);
         setEditingImg(img);
         setEditKey((k) => k + 1);
-        editedFlag.current = false;
+        setZoom(8);
       } catch {
         notify("Could not decode PNG.", "err");
       }
@@ -160,11 +247,12 @@ export default function ResourcePackPage() {
   }, [files, notify]);
 
   // ---- mutations ----
-  const addFiles = useCallback(async (uploads: File[]) => {
+  const addFiles = useCallback(async (uploads: File[], targetDir?: string) => {
+    const dir = targetDir ?? uploadDir;
     const next = new Map(files);
     let added = 0;
     for (const f of uploads) {
-      const target = currentDir ? `${currentDir}/${f.name}` : f.name;
+      const target = dir ? `${dir}/${f.name}` : f.name;
       const safe = sanitizeZipPath(target);
       if (!safe) { notify(`Rejected unsafe name: ${f.name}`, "err"); continue; }
       if (f.size > 50 * 1024 * 1024) { notify(`${f.name} is larger than 50 MB — skipped.`, "err"); continue; }
@@ -173,7 +261,7 @@ export default function ResourcePackPage() {
     }
     setFiles(next);
     if (added) { notify(`Added ${added} file${added === 1 ? "" : "s"}`); markDirty(); }
-  }, [files, currentDir, markDirty, notify]);
+  }, [files, uploadDir, markDirty, notify]);
 
   const replaceSelected = useCallback(async (uploads: File[]) => {
     if (!selected) return;
@@ -192,18 +280,17 @@ export default function ResourcePackPage() {
     const next = new Map(files);
     if (isDir) {
       for (const k of [...next.keys()]) if (k === path || k.startsWith(path + "/")) next.delete(k);
-      if (currentDir === path || currentDir.startsWith(path + "/")) setCurrentDir(dirOf(path));
     } else {
       next.delete(path);
     }
     setFiles(next);
-    if (selected === path) setSelected(null);
+    if (selected === path || (isDir && selected?.startsWith(path + "/"))) setSelected(null);
     markDirty();
     notify("Deleted");
-  }, [files, currentDir, selected, markDirty, notify]);
+  }, [files, selected, markDirty, notify]);
 
   const renamePath = useCallback((path: string, isDir: boolean) => {
-    const base = isDir ? baseOf(path) : baseOf(path);
+    const base = baseOf(path);
     const nextName = prompt("New name:", base);
     if (!nextName || nextName === base) return;
     if (/[/\\]/.test(nextName)) { notify("Name must not contain slashes.", "err"); return; }
@@ -214,12 +301,10 @@ export default function ResourcePackPage() {
     if (isDir) {
       for (const k of [...next.keys()]) {
         if (k === path || k.startsWith(path + "/")) {
-          const rest = k.slice(path.length);
-          next.set(dest + rest, next.get(k)!);
+          next.set(dest + k.slice(path.length), next.get(k)!);
           next.delete(k);
         }
       }
-      if (currentDir === path) setCurrentDir(dest);
     } else {
       if (next.has(dest)) { notify("A file with that name already exists.", "err"); return; }
       next.set(dest, next.get(path)!);
@@ -229,7 +314,28 @@ export default function ResourcePackPage() {
     setFiles(next);
     markDirty();
     notify("Renamed");
-  }, [files, currentDir, selected, markDirty, notify]);
+  }, [files, selected, markDirty, notify]);
+
+  const duplicateFile = useCallback((path: string) => {
+    const bytes = files.get(path);
+    if (!bytes) return;
+    const dir = dirOf(path);
+    const base = baseOf(path);
+    const dot = base.lastIndexOf(".");
+    const stem = dot > 0 ? base.slice(0, dot) : base;
+    const ext = dot > 0 ? base.slice(dot) : "";
+    let dest = dir ? `${dir}/${stem} copy${ext}` : `${stem} copy${ext}`;
+    let n = 2;
+    const next = new Map(files);
+    while (next.has(dest)) {
+      dest = dir ? `${dir}/${stem} copy ${n}${ext}` : `${stem} copy ${n}${ext}`;
+      n++;
+    }
+    next.set(dest, bytes.slice());
+    setFiles(next);
+    markDirty();
+    notify("Duplicated");
+  }, [files, markDirty, notify]);
 
   const downloadPath = useCallback((path: string) => {
     const bytes = files.get(path);
@@ -240,14 +346,17 @@ export default function ResourcePackPage() {
   }, [files, notify]);
 
   const createFolder = useCallback(() => {
-    const name = prompt("Folder name:");
+    const base = selected && !files.has(selected) ? selected : dirOf(selected ?? "");
+    const name = prompt("Folder name:", "");
     if (!name) return;
     if (/[/\\]/.test(name)) { notify("Folder name must not contain slashes.", "err"); return; }
-    setCurrentDir((d) => (d ? `${d}/${name}` : name));
-    notify("Folder created");
-  }, [notify]);
+    const dest = base ? `${base}/${name}` : name;
+    if (!sanitizeZipPath(dest + "/x")) { notify("Invalid name.", "err"); return; }
+    setExpanded((s) => new Set(s).add(dest));
+    notify(`Folder "${dest}" will exist once you add files to it`);
+  }, [selected, files, notify]);
 
-  // ---- mcmeta ----
+  // ---- save current (Ctrl+S) ----
   const saveMcmeta = useCallback(() => {
     try {
       const parsed = JSON.parse(mcmetaText);
@@ -259,28 +368,87 @@ export default function ResourcePackPage() {
       setMcmetaText(JSON.stringify(parsed, null, 2));
       markDirty();
       notify("pack.mcmeta saved");
+      return true;
     } catch (e) {
       setMcmetaError(e instanceof Error ? e.message : "Invalid JSON");
       notify("Invalid JSON — not saved.", "err");
+      return false;
     }
   }, [mcmetaText, files, markDirty, notify]);
 
-  // ---- texture apply ----
+  const saveModelJson = useCallback(() => {
+    if (!selected) return false;
+    try {
+      const parsed = JSON.parse(modelText);
+      setModelError("");
+      const next = new Map(files);
+      next.set(selected, new TextEncoder().encode(JSON.stringify(parsed, null, 2)));
+      setFiles(next);
+      setModelText(JSON.stringify(parsed, null, 2));
+      markDirty();
+      notify("Model saved");
+      return true;
+    } catch (e) {
+      setModelError(e instanceof Error ? e.message : "Invalid JSON");
+      notify("Invalid JSON — not saved.", "err");
+      return false;
+    }
+  }, [selected, modelText, files, markDirty, notify]);
+
   const applyTextureEdit = useCallback(async () => {
-    if (!selected || !editorRef.current) return;
+    if (!selected || !editorRef.current) return false;
     const blob = await editorRef.current.getBlob();
-    if (!blob) { notify("Export failed", "err"); return; }
+    if (!blob) { notify("Export failed", "err"); return false; }
     const next = new Map(files);
     next.set(selected, new Uint8Array(await blob.arrayBuffer()));
     setFiles(next);
     markDirty();
     notify("Texture saved");
+    return true;
   }, [selected, files, markDirty, notify]);
+
+  const saveCurrent = useCallback(() => {
+    if (!selected) return;
+    if (/\.png$/i.test(selected)) void applyTextureEdit();
+    else if (/\.json$/i.test(selected)) saveModelJson();
+    else if (selected === "pack.mcmeta") saveMcmeta();
+    else if (/\.(txt|lang|properties)$/i.test(selected)) {
+      const next = new Map(files);
+      next.set(selected, new TextEncoder().encode(modelText));
+      setFiles(next);
+      markDirty();
+      notify("File saved");
+    } else {
+      notify("Nothing to save for binary files.", "info");
+    }
+  }, [selected, applyTextureEdit, saveModelJson, saveMcmeta, files, modelText, markDirty, notify]);
+
+  // ---- quick validate ----
+  const quickValidate = useCallback(async () => {
+    setBusy("Validating…");
+    try {
+      const list = await Promise.all(
+        [...files.entries()].map(async ([path, bytes]) => ({
+          path, size: bytes.length,
+          bytes: async () => bytes,
+          text: async () => new TextDecoder().decode(bytes),
+        }))
+      );
+      const rep = await validatePack(list, mcVersion);
+      setQuickReport(
+        rep.ok
+          ? `Valid — ${rep.checkedFiles} files, ${rep.warnings.length} warning(s). Full report in Validator.`
+          : `${rep.errors.length} error(s), ${rep.warnings.length} warning(s). See Validator for details.`
+      );
+      notify(rep.ok ? "Validation passed" : "Problems found — see Validator", rep.ok ? "ok" : "err");
+    } finally {
+      setBusy("");
+    }
+  }, [files, mcVersion, notify]);
 
   // ---- export ----
   const exportZip = useCallback(async () => {
     if (!files.size) { notify("Nothing to export.", "err"); return; }
-    // Validate mcmeta before export
     try {
       JSON.parse(new TextDecoder().decode(files.get("pack.mcmeta") ?? new TextEncoder().encode(mcmetaText)));
     } catch {
@@ -318,6 +486,24 @@ export default function ResourcePackPage() {
     return () => clearTimeout(id);
   }, [autosave, dirty, loaded, files, packName]);
 
+  // ---- shortcuts: Ctrl+S save · Ctrl+O open · Ctrl+E export · Del delete ----
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      const typing = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (e.target as HTMLElement)?.isContentEditable;
+      const mod = e.ctrlKey || e.metaKey;
+      if (mod && e.key.toLowerCase() === "s") { e.preventDefault(); if (!typing) saveCurrent(); }
+      else if (mod && e.key.toLowerCase() === "o") { e.preventDefault(); zipInput.current?.click(); }
+      else if (mod && e.key.toLowerCase() === "e") { e.preventDefault(); void exportZip(); }
+      else if ((e.key === "Delete" || e.key === "Backspace") && !typing && selected) {
+        e.preventDefault();
+        deletePath(selected, false);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [saveCurrent, exportZip, selected, deletePath]);
+
   const audioMeta = useMemo(() => {
     if (!selected || !/\.(ogg|wav|mp3)$/i.test(selected)) return null;
     const bytes = files.get(selected);
@@ -330,42 +516,39 @@ export default function ResourcePackPage() {
     try { return JSON.parse(modelText || "{}"); } catch { return null; }
   }, [selected, modelText]);
 
-  const saveModelJson = useCallback(() => {
-    if (!selected) return;
+  const mcmetaSummary = useMemo(() => {
     try {
-      const parsed = JSON.parse(modelText);
-      setModelError("");
-      const next = new Map(files);
-      next.set(selected, new TextEncoder().encode(JSON.stringify(parsed, null, 2)));
-      setFiles(next);
-      setModelText(JSON.stringify(parsed, null, 2));
-      markDirty();
-      notify("Model saved");
-    } catch (e) {
-      setModelError(e instanceof Error ? e.message : "Invalid JSON");
-      notify("Invalid JSON — not saved.", "err");
+      const d = JSON.parse(new TextDecoder().decode(files.get("pack.mcmeta") ?? new Uint8Array())) as {
+        pack?: { pack_format?: number; description?: unknown };
+      };
+      return { format: d?.pack?.pack_format as number | undefined, desc: typeof d?.pack?.description === "string" ? d.pack.description : undefined };
+    } catch {
+      return { format: undefined, desc: undefined };
     }
-  }, [selected, modelText, files, markDirty, notify]);
-
-  const saveTextFile = saveModelJson;
+  }, [files, mcmetaText]);
 
   if (!loaded) {
     return (
-      <div className="mx-auto flex max-w-2xl flex-col gap-4">
+      <div className="mx-auto flex w-full max-w-xl flex-col gap-4 py-6">
         <div>
-          <h1 className="text-[20px] font-bold tracking-tight">Resource Pack Studio</h1>
-          <p className="text-[13px] text-slate-500 dark:text-slate-400">Import a <span className="font-mono">.zip</span> — everything is read locally in your browser. <span className="rounded border border-slate-200 px-1.5 py-0.5 text-[11px] dark:border-slate-700">Local</span></p>
+          <h1 className="flex items-center gap-2 text-[19px] font-bold tracking-tight">
+            <PackageOpen className="size-5" aria-hidden style={{ color: "var(--accent)" }} />
+            Resource Pack Studio
+          </h1>
+          <p className="mt-0.5 text-[13px]" style={{ color: "var(--muted)" }}>
+            Import a <span className="font-mono">.zip</span> — parsed locally in your browser, never uploaded.
+          </p>
         </div>
-        <Dropzone accept=".zip" onFiles={importZip} label="Drop a resource pack .zip here or click to browse" hint="Parsed locally · path traversal rejected · archives over 500 MB / 8000 files rejected (ZIP-bomb protection)" />
+        <Dropzone accept=".zip" onFiles={importZip} label="Drop a resource pack .zip here or click to browse" hint="Path traversal rejected · archives over 500 MB / 8000 files rejected (ZIP-bomb protection)" />
         <div className="flex items-center gap-2">
-          <button onClick={newBlankPack} className="flex items-center gap-1.5 rounded-md bg-emerald-600 px-3 py-2 text-[13px] font-semibold text-white hover:bg-emerald-700">
+          <Btn primary onClick={newBlankPack}>
             <Plus className="size-4" aria-hidden /> New blank pack
-          </button>
-          {busy && <span className="text-[13px] text-slate-500">{busy}</span>}
+          </Btn>
+          {busy && <span className="text-[13px]" style={{ color: "var(--muted)" }} role="status">{busy}</span>}
         </div>
-        <div className="rounded-md border border-slate-200 bg-white p-3 text-[12.5px] text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
-          Expected structure: <code>pack.mcmeta</code>, <code>pack.png</code>, <code>assets/minecraft/textures/…</code>
-        </div>
+        <p className="font-mono text-[12px]" style={{ color: "var(--faint)" }}>
+          pack.mcmeta · pack.png · assets/minecraft/textures/…
+        </p>
       </div>
     );
   }
@@ -375,249 +558,386 @@ export default function ResourcePackPage() {
   const selIsAudio = selected ? /\.(ogg|wav|mp3)$/i.test(selected) : false;
   const selIsText = selected ? /\.(txt|mcmeta|lang|properties)$/i.test(selected) && !selIsJson : false;
 
+  const ctxItems = (path: string, isDir: boolean): CtxItem[] => {
+    const items: CtxItem[] = [
+      { label: "Open", icon: <FolderOpen className="size-4" />, disabled: isDir, onSelect: () => void openPath(path) },
+      {
+        label: "Add files here", icon: <FileUp className="size-4" />, disabled: !isDir,
+        onSelect: () => { setUploadDir(path); addInput.current?.click(); },
+      },
+      { label: "Download", icon: <Download className="size-4" />, disabled: isDir, onSelect: () => downloadPath(path) },
+      { label: "Duplicate", icon: <Copy className="size-4" />, disabled: isDir, onSelect: () => duplicateFile(path) },
+      { label: "Rename", icon: <Pencil className="size-4" />, onSelect: () => renamePath(path, isDir) },
+      { label: "Delete", icon: <Trash2 className="size-4" />, danger: true, onSelect: () => deletePath(path, isDir) },
+    ];
+    return items;
+  };
+
   return (
-    <div className="flex flex-col gap-3">
-      {/* header */}
+    <div className="flex min-h-0 flex-1 flex-col gap-2">
+      {/* action bar */}
       <div className="flex flex-wrap items-center gap-2">
-        <PackageOpen className="size-5 text-emerald-600" aria-hidden />
         <input
           value={packName}
           onChange={(e) => { setPackName(e.target.value); markDirty(); }}
           aria-label="Pack name"
-          className="w-52 rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[14px] font-bold dark:border-slate-700 dark:bg-slate-900"
+          spellCheck={false}
+          className="w-48 rounded border px-2 py-1 text-[14px] font-bold outline-none"
+          style={{ borderColor: "transparent", background: "transparent" }}
+          onFocus={(e) => ((e.target as HTMLInputElement).style.borderColor = "var(--border)")}
+          onBlur={(e) => ((e.target as HTMLInputElement).style.borderColor = "transparent")}
         />
-        <span className="text-[12px] text-slate-500 dark:text-slate-400">{files.size} files{dirty ? " · unsaved changes" : " · saved locally"}</span>
+        <span className="flex items-center gap-1.5 font-mono text-[11.5px]" style={{ color: "var(--muted)" }} role="status">
+          <span
+            className="inline-block size-2 rounded-full"
+            style={{ background: dirty ? "var(--warn)" : "var(--accent)" }}
+            title={dirty ? "Unsaved changes" : "Saved locally"}
+          />
+          {busy || (dirty ? "Unsaved changes" : "Saved locally")}
+        </span>
         <span className="ms-auto flex items-center gap-1.5">
-          <button onClick={exportZip} disabled={!!busy} className="flex items-center gap-1.5 rounded-md bg-emerald-600 px-3 py-1.5 text-[13px] font-semibold text-white hover:bg-emerald-700 disabled:opacity-50">
-            <Download className="size-4" aria-hidden /> Export Resource Pack
-          </button>
-          <button onClick={() => { setLoaded(false); setFiles(new Map()); setSelected(null); }} className="rounded-md border border-slate-200 px-3 py-1.5 text-[13px] hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800">
-            Close
-          </button>
+          <Btn onClick={quickValidate} title="Validate against target version">
+            <ShieldCheck className="size-4" aria-hidden /> Validate
+          </Btn>
+          <Btn onClick={saveCurrent} title="Save current file (Ctrl+S)">
+            <Save className="size-4" aria-hidden /> Save
+          </Btn>
+          <Btn primary onClick={exportZip} title="Export .zip (Ctrl+E)">
+            <Download className="size-4" aria-hidden /> Export
+          </Btn>
+          <Btn
+            onClick={() => { setLoaded(false); setFiles(new Map()); setSelected(null); setProject(null); }}
+            title="Close pack"
+          >
+            <X className="size-4" aria-hidden />
+          </Btn>
         </span>
       </div>
-      {busy && <p className="text-[12.5px] text-slate-500" role="status">{busy}</p>}
+      {quickReport && (
+        <p className="rounded border px-2.5 py-1.5 font-mono text-[12px]" style={{ borderColor: "var(--border)", background: "var(--panel)" }} role="status">
+          {quickReport}
+        </p>
+      )}
 
-      {/* breadcrumbs */}
-      <nav aria-label="Breadcrumb" className="flex flex-wrap items-center gap-1 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-[12.5px] dark:border-slate-700 dark:bg-slate-900">
-        <button onClick={() => setCurrentDir("")} className="font-semibold text-emerald-600 hover:underline">{packName}</button>
-        {crumbs.map((c, i) => (
-          <React.Fragment key={i}>
-            <ChevronRight className="size-3.5 text-slate-400" aria-hidden />
-            <button onClick={() => setCurrentDir(crumbs.slice(0, i + 1).join("/"))} className="hover:underline">{c}</button>
-          </React.Fragment>
-        ))}
-        <span className="ms-auto flex items-center gap-1">
-          <button onClick={createFolder} className="flex items-center gap-1 rounded px-2 py-1 text-[12px] hover:bg-slate-100 dark:hover:bg-slate-800"><Plus className="size-3.5" aria-hidden /> Folder</button>
-          <label className="flex cursor-pointer items-center gap-1 rounded px-2 py-1 text-[12px] hover:bg-slate-100 dark:hover:bg-slate-800">
-            <FileUp className="size-3.5" aria-hidden /> Add files
-            <input type="file" multiple className="hidden" onChange={async (e) => { if (e.target.files) await addFiles([...e.target.files]); e.target.value = ""; }} />
-          </label>
-        </span>
-      </nav>
-
-      <div className="grid gap-3 lg:grid-cols-[300px_1fr]">
+      {/* 3-pane workspace */}
+      <div className="flex min-h-[480px] flex-1 flex-col gap-0 lg:flex-row" style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", background: "var(--panel)", overflow: "hidden" }}>
         {/* explorer */}
-        <section aria-label="File explorer" className="overflow-hidden rounded-md border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900">
-          <div className="border-b border-slate-200 px-3 py-2 text-[12px] font-semibold uppercase tracking-wider text-slate-500 dark:border-slate-700 dark:text-slate-400">
-            Explorer — {currentDir || "/"}
+        <section
+          aria-label="File explorer"
+          className="flex min-h-0 flex-col border-b lg:border-b-0 lg:border-e"
+          style={{ borderColor: "var(--border)", ...(isDesktop ? { width: explorerW, flex: "none" } : {}) }}
+        >
+          <div className="flex items-center gap-1 border-b px-2 py-1.5" style={{ borderColor: "var(--border)" }}>
+            <div className="relative min-w-0 flex-1">
+              <Search className="pointer-events-none absolute start-2 top-1/2 size-3.5 -translate-y-1/2" aria-hidden style={{ color: "var(--faint)" }} />
+              <input
+                value={treeQuery}
+                onChange={(e) => setTreeQuery(e.target.value)}
+                placeholder="Search files…"
+                aria-label="Search files"
+                spellCheck={false}
+                className="w-full rounded border py-1 pe-2 ps-7 text-[12.5px] outline-none"
+                style={{ borderColor: "var(--border)", background: "var(--panel-2)" }}
+              />
+            </div>
+            <IconBtn label="New folder" onClick={createFolder}>
+              <FilePlus2 className="size-4" aria-hidden />
+            </IconBtn>
+            <IconBtn label="Add files" onClick={() => { setUploadDir(selected ? dirOf(selected) : ""); addInput.current?.click(); }}>
+              <FileUp className="size-4" aria-hidden />
+            </IconBtn>
           </div>
-          <ul className="max-h-[480px] overflow-y-auto p-1.5">
-            {currentDir && (
-              <li>
-                <button onClick={() => setCurrentDir(dirOf(currentDir))} className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-[13px] hover:bg-slate-100 dark:hover:bg-slate-800">
-                  <Folder className="size-4 text-slate-400" aria-hidden /> ..
-                </button>
-              </li>
+          <div className="max-h-64 min-h-0 flex-1 overflow-y-auto p-1 lg:max-h-none" role="tree" aria-label="Pack files">
+            {filtered ? (
+              <ul>
+                {filtered.map((f) => {
+                  const Icon = fileIcon(f);
+                  const active = selected === f;
+                  return (
+                    <li key={f}>
+                      <button
+                        onClick={() => void openPath(f)}
+                        className="file-row ui-transition flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-start"
+                        data-active={active}
+                        aria-current={active ? "true" : undefined}
+                      >
+                        <Icon className="size-3.5 shrink-0" aria-hidden style={{ color: "var(--faint)" }} />
+                        <span className="truncate font-mono text-[12px]">{f}</span>
+                      </button>
+                    </li>
+                  );
+                })}
+                {filtered.length === 0 && <li className="px-2 py-4 text-center text-[12px]" style={{ color: "var(--muted)" }}>No matches.</li>}
+              </ul>
+            ) : (
+              <TreeNodeView
+                node={tree}
+                depth={0}
+                expanded={expanded}
+                toggle={(p) => setExpanded((s) => {
+                  const n = new Set(s);
+                  if (n.has(p)) n.delete(p); else n.add(p);
+                  return n;
+                })}
+                selected={selected}
+                onSelect={(p) => void openPath(p)}
+                onCtx={(e, path, isDir) => { e.preventDefault(); setCtx({ x: e.clientX, y: e.clientY, path, isDir }); }}
+              />
             )}
-            {visible.subdirs.map((d) => {
-              const full = currentDir ? `${currentDir}/${d}` : d;
-              return (
-                <li key={full} className="group flex items-center gap-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800">
-                  <button onClick={() => setCurrentDir(full)} className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-start text-[13px]">
-                    <Folder className="size-4 shrink-0 text-amber-500" aria-hidden />
-                    <span className="truncate font-medium">{d}</span>
-                  </button>
-                  <span className="hidden gap-0.5 pe-1 group-hover:flex">
-                    <button onClick={() => renamePath(full, true)} aria-label={`Rename ${d}`} title="Rename" className="rounded p-1 hover:bg-slate-200 dark:hover:bg-slate-700"><Pencil className="size-3.5" aria-hidden /></button>
-                    <button onClick={() => deletePath(full, true)} aria-label={`Delete ${d}`} title="Delete" className="rounded p-1 hover:bg-red-100 hover:text-red-600 dark:hover:bg-red-950"><Trash2 className="size-3.5" aria-hidden /></button>
-                  </span>
-                </li>
-              );
-            })}
-            {visible.items.map((f) => {
-              const isImg = /\.png$/i.test(f);
-              const isAud = /\.(ogg|wav|mp3)$/i.test(f);
-              const isJson = /\.json$/i.test(f) || f === "pack.mcmeta";
-              const Icon = isImg ? ImageIcon : isAud ? Music : isJson ? Braces : FileIcon;
-              const active = selected === f;
-              return (
-                <li key={f} className={`group flex items-center gap-1 rounded ${active ? "bg-emerald-600/10" : "hover:bg-slate-100 dark:hover:bg-slate-800"}`}>
-                  <button onClick={() => openPath(f)} className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-start text-[13px]" aria-current={active ? "true" : undefined}>
-                    <Icon className="size-4 shrink-0 text-slate-400" aria-hidden />
-                    <span className="truncate font-mono text-[12.5px]">{baseOf(f)}</span>
-                    <span className="ms-auto shrink-0 text-[10.5px] text-slate-400">{formatBytes(files.get(f)?.length ?? 0)}</span>
-                  </button>
-                  <span className="hidden gap-0.5 pe-1 group-hover:flex">
-                    <button onClick={() => downloadPath(f)} aria-label={`Download ${baseOf(f)}`} title="Download" className="rounded p-1 hover:bg-slate-200 dark:hover:bg-slate-700"><Download className="size-3.5" aria-hidden /></button>
-                    <button onClick={() => renamePath(f, false)} aria-label={`Rename ${baseOf(f)}`} title="Rename" className="rounded p-1 hover:bg-slate-200 dark:hover:bg-slate-700"><Pencil className="size-3.5" aria-hidden /></button>
-                    <button onClick={() => deletePath(f, false)} aria-label={`Delete ${baseOf(f)}`} title="Delete" className="rounded p-1 hover:bg-red-100 hover:text-red-600 dark:hover:bg-red-950"><Trash2 className="size-3.5" aria-hidden /></button>
-                  </span>
-                </li>
-              );
-            })}
-            {visible.subdirs.length === 0 && visible.items.length === 0 && (
-              <li className="px-2 py-6 text-center text-[12.5px] text-slate-500">Empty folder. Add files above.</li>
-            )}
-          </ul>
+          </div>
+          <div className="border-t px-2.5 py-1 font-mono text-[10.5px]" style={{ borderColor: "var(--border)", color: "var(--faint)" }}>
+            {files.size} files · {formatBytes(totalBytes)}
+          </div>
         </section>
 
-        {/* editor panel */}
-        <section aria-label="Editor" className="min-w-0 rounded-md border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900">
-          {!selected && (
-            <div className="grid gap-3 md:grid-cols-2">
+        <div className="hidden lg:block"><Resizer onResize={(dx) => setExplorerW((w) => Math.min(420, Math.max(180, w + dx)))} /></div>
+
+        {/* editor */}
+        <section aria-label="Editor" className="flex min-h-[320px] min-w-0 flex-1 flex-col" style={{ background: "var(--bg)" }}>
+          {!selected ? (
+            <div className="flex flex-1 flex-col gap-3 overflow-y-auto p-3">
               <div>
                 <h2 className="mb-1 text-[13px] font-bold">pack.mcmeta</h2>
                 <textarea
                   value={mcmetaText}
                   onChange={(e) => { setMcmetaText(e.target.value); setMcmetaError(""); }}
-                  rows={10}
+                  rows={9}
                   spellCheck={false}
                   aria-label="pack.mcmeta JSON"
-                  className="w-full rounded-md border border-slate-200 bg-slate-50 p-2 font-mono text-[12px] dark:border-slate-700 dark:bg-slate-950"
+                  className="w-full rounded border p-2 font-mono text-[12px] outline-none"
+                  style={{ borderColor: "var(--border)", background: "var(--panel)" }}
                 />
-                {mcmetaError && <p className="mt-1 text-[12px] text-red-600" role="alert">{mcmetaError}</p>}
-                <button onClick={saveMcmeta} className="mt-2 flex items-center gap-1.5 rounded-md bg-slate-900 px-3 py-1.5 text-[13px] font-semibold text-white hover:bg-slate-700 dark:bg-slate-100 dark:text-slate-900">
-                  <Save className="size-4" aria-hidden /> Save pack.mcmeta
-                </button>
+                {mcmetaError && <p className="mt-1 text-[12px]" style={{ color: "var(--danger)" }} role="alert">{mcmetaError}</p>}
+                <div className="mt-1.5">
+                  <Btn primary onClick={saveMcmeta}>
+                    <Save className="size-4" aria-hidden /> Save pack.mcmeta
+                  </Btn>
+                </div>
               </div>
-              <div className="text-[12.5px] text-slate-600 dark:text-slate-300">
-                <h2 className="mb-1 text-[13px] font-bold text-slate-900 dark:text-slate-100">How to work</h2>
-                <ol className="list-inside list-decimal space-y-1">
-                  <li>Browse folders on the left.</li>
-                  <li>Click a <span className="font-mono">.png</span> to pixel-edit it.</li>
-                  <li>Click a <span className="font-mono">.json</span> model to validate + preview.</li>
-                  <li>Click a sound to play it and see format info.</li>
-                  <li>Export produces a real <span className="font-mono">.zip</span> with the same structure.</li>
-                </ol>
-                <p className="mt-2 rounded border border-slate-200 p-2 dark:border-slate-700">Target version: <span className="font-mono font-bold">{mcVersion}</span> (change in Settings or Version Tools).</p>
-              </div>
+              <ol className="list-inside list-decimal space-y-0.5 text-[12.5px]" style={{ color: "var(--muted)" }}>
+                <li>Browse the tree on the left — right-click for actions.</li>
+                <li>Click a <span className="font-mono">.png</span> to pixel-edit it.</li>
+                <li>Click a <span className="font-mono">.json</span> model to validate + preview.</li>
+                <li>Shortcuts: <span className="font-mono">Ctrl+S</span> save · <span className="font-mono">Ctrl+E</span> export · <span className="font-mono">Del</span> delete.</li>
+              </ol>
             </div>
-          )}
-
-          {selected && (
-            <div>
-              <div className="mb-2 flex flex-wrap items-center gap-2">
-                <code className="min-w-0 flex-1 truncate rounded bg-slate-100 px-2 py-1 font-mono text-[12px] dark:bg-slate-800">{selected}</code>
-                <label className="flex cursor-pointer items-center gap-1 rounded-md border border-slate-200 px-2 py-1 text-[12px] hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800">
-                  <Replace className="size-3.5" aria-hidden /> Replace
+          ) : (
+            <div className="flex min-h-0 flex-1 flex-col">
+              <div className="flex items-center gap-1.5 border-b px-2.5 py-1.5" style={{ borderColor: "var(--border)", background: "var(--panel)" }}>
+                <code className="min-w-0 flex-1 truncate font-mono text-[12px]">{selected}</code>
+                <label className="ui-transition cursor-pointer rounded border px-2 py-1 text-[12px] font-semibold" style={{ borderColor: "var(--border)" }} title="Replace file">
+                  Replace
                   <input type="file" className="hidden" onChange={async (e) => { if (e.target.files) await replaceSelected([...e.target.files]); e.target.value = ""; }} />
                 </label>
-                <button onClick={() => downloadPath(selected)} className="flex items-center gap-1 rounded-md border border-slate-200 px-2 py-1 text-[12px] hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800">
-                  <Download className="size-3.5" aria-hidden /> Download
-                </button>
-                <button onClick={() => { setSelected(null); }} aria-label="Close file" className="rounded-md border border-slate-200 p-1.5 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800">
+                <IconBtn label="Download file" onClick={() => downloadPath(selected)}>
+                  <Download className="size-4" aria-hidden />
+                </IconBtn>
+                <IconBtn label="Save file (Ctrl+S)" onClick={saveCurrent}>
+                  <Save className="size-4" aria-hidden />
+                </IconBtn>
+                <IconBtn label="Close file" onClick={() => setSelected(null)}>
                   <X className="size-4" aria-hidden />
-                </button>
+                </IconBtn>
               </div>
-
-              {selIsPng && editingImg && imgDims && (
-                <div className="grid gap-3 xl:grid-cols-2">
+              <div className="min-h-0 flex-1 overflow-y-auto p-3">
+                {selIsPng && editingImg && imgDims && (
                   <PixelEditor
                     key={selected + editKey}
                     ref={editorRef}
                     width={imgDims[0]}
                     height={imgDims[1]}
                     initialImage={editingImg}
-                    onEdit={() => { editedFlag.current = true; }}
+                    showGridDefault={showGrid}
+                    onEdit={markDirty}
+                    onZoomChange={setZoom}
                   />
-                  <div className="flex flex-col gap-2">
-                    <h3 className="text-[13px] font-bold">Texture preview</h3>
-                    {previewUrl && (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={previewUrl} alt={`Preview of ${selected}`} className="max-h-56 w-auto self-start rounded border border-slate-200 bg-[repeating-conic-gradient(#ddd_0_25%,#fff_0_50%)] bg-[length:16px_16px] dark:border-slate-700" style={{ imageRendering: "pixelated" }} />
-                    )}
-                    <p className="text-[12px] text-slate-500 dark:text-slate-400">{imgDims[0]}×{imgDims[1]} px · {formatBytes(files.get(selected)?.length ?? 0)}</p>
-                    <button onClick={applyTextureEdit} className="flex w-fit items-center gap-1.5 rounded-md bg-emerald-600 px-3 py-1.5 text-[13px] font-semibold text-white hover:bg-emerald-700">
-                      <Save className="size-4" aria-hidden /> Apply texture edit
-                    </button>
-                    <p className="text-[11.5px] text-slate-500">Edits stay pixel-perfect (nearest-neighbor only, alpha preserved). Apply writes back into the pack.</p>
-                  </div>
-                </div>
-              )}
-
-              {(selIsJson || selected === "pack.mcmeta") && (
-                <div className="grid gap-3 xl:grid-cols-2">
-                  <div>
-                    <div className="mb-1 flex items-center gap-2">
-                      <h3 className="text-[13px] font-bold">{selected === "pack.mcmeta" ? "pack.mcmeta" : "Model JSON"}</h3>
-                      <button
-                        onClick={() => {
-                          try {
-                            const t = selected === "pack.mcmeta" ? mcmetaText : modelText;
-                            const fmt = JSON.stringify(JSON.parse(t), null, 2);
-                            if (selected === "pack.mcmeta") setMcmetaText(fmt); else setModelText(fmt);
-                          } catch { notify("Invalid JSON — cannot format.", "err"); }
-                        }}
-                        className="rounded border border-slate-200 px-2 py-0.5 text-[12px] hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800"
-                      >
-                        Format
-                      </button>
+                )}
+                {(selIsJson || selected === "pack.mcmeta") && (
+                  <div className="grid min-h-full gap-3 xl:grid-cols-2">
+                    <div className="flex min-w-0 flex-col">
+                      <div className="mb-1 flex items-center gap-2">
+                        <button
+                          onClick={() => {
+                            try {
+                              const src = selected === "pack.mcmeta" ? mcmetaText : modelText;
+                              const fmt = JSON.stringify(JSON.parse(src), null, 2);
+                              if (selected === "pack.mcmeta") setMcmetaText(fmt); else setModelText(fmt);
+                            } catch { notify("Invalid JSON — cannot format.", "err"); }
+                          }}
+                          className="ui-transition rounded border px-2 py-0.5 text-[12px]"
+                          style={{ borderColor: "var(--border)" }}
+                        >
+                          Format
+                        </button>
+                        {(modelError || mcmetaError) && <span className="text-[12px]" style={{ color: "var(--danger)" }} role="alert">{modelError || mcmetaError}</span>}
+                      </div>
+                      <textarea
+                        value={selected === "pack.mcmeta" ? mcmetaText : modelText}
+                        onChange={(e) => { if (selected === "pack.mcmeta") { setMcmetaText(e.target.value); setMcmetaError(""); } else { setModelText(e.target.value); setModelError(""); } }}
+                        rows={20}
+                        spellCheck={false}
+                        aria-label={`Edit ${selected}`}
+                        className="w-full flex-1 rounded border p-2 font-mono text-[12px] outline-none"
+                        style={{ borderColor: "var(--border)", background: "var(--panel)" }}
+                      />
                     </div>
-                    <textarea
-                      value={selected === "pack.mcmeta" ? mcmetaText : modelText}
-                      onChange={(e) => { if (selected === "pack.mcmeta") setMcmetaText(e.target.value); else setModelText(e.target.value); }}
-                      rows={18}
-                      spellCheck={false}
-                      aria-label={`Edit ${selected}`}
-                      className="w-full rounded-md border border-slate-200 bg-slate-50 p-2 font-mono text-[12px] dark:border-slate-700 dark:bg-slate-950"
-                    />
-                    {(modelError || mcmetaError) && <p className="mt-1 text-[12px] text-red-600" role="alert">{modelError || mcmetaError}</p>}
-                    <button onClick={selected === "pack.mcmeta" ? saveMcmeta : saveModelJson} className="mt-2 flex items-center gap-1.5 rounded-md bg-slate-900 px-3 py-1.5 text-[13px] font-semibold text-white hover:bg-slate-700 dark:bg-slate-100 dark:text-slate-900">
-                      <Save className="size-4" aria-hidden /> Save JSON
-                    </button>
+                    <div className="min-w-0">
+                      <ModelPreview model={parsedModel} />
+                      {!parsedModel && <p className="mt-1 text-[12.5px]" style={{ color: "var(--danger)" }}>Invalid JSON — fix syntax to preview.</p>}
+                    </div>
                   </div>
-                  <div>
-                    <h3 className="mb-1 text-[13px] font-bold">3D preview</h3>
-                    {parsedModel ? <ModelPreview model={parsedModel} /> : <p className="text-[12.5px] text-red-600">Invalid JSON — fix syntax to preview.</p>}
+                )}
+                {selIsAudio && (
+                  <div className="flex max-w-lg flex-col gap-2">
+                    <dl className="grid grid-cols-[96px_1fr] gap-1 rounded border p-3 text-[12.5px]" style={{ borderColor: "var(--border)", background: "var(--panel)" }}>
+                      <dt style={{ color: "var(--muted)" }}>Filename</dt><dd className="font-mono">{baseOf(selected)}</dd>
+                      <dt style={{ color: "var(--muted)" }}>Size</dt><dd className="font-mono">{formatBytes(audioMeta?.size ?? 0)}</dd>
+                      <dt style={{ color: "var(--muted)" }}>Format</dt><dd className="font-mono">{audioMeta?.format ?? "unknown"}</dd>
+                      <dt style={{ color: "var(--muted)" }}>Duration</dt><dd><DurationProbe url={soundUrls[selected] ?? previewUrl} /></dd>
+                    </dl>
+                    {(soundUrls[selected] ?? previewUrl) && (
+                      <audio controls src={soundUrls[selected] ?? previewUrl} className="w-full" preload="metadata" />
+                    )}
+                    <p className="text-[11.5px]" style={{ color: "var(--muted)" }}>Sounds are never converted — replace preserves bytes exactly.</p>
                   </div>
-                </div>
-              )}
-
-              {selIsAudio && (
-                <div className="flex flex-col gap-2">
-                  <dl className="grid max-w-lg grid-cols-[110px_1fr] gap-1 rounded-md border border-slate-200 p-3 text-[12.5px] dark:border-slate-700">
-                    <dt className="text-slate-500">Filename</dt><dd className="font-mono">{baseOf(selected)}</dd>
-                    <dt className="text-slate-500">Path</dt><dd className="font-mono break-all">{selected}</dd>
-                    <dt className="text-slate-500">Size</dt><dd>{formatBytes(audioMeta?.size ?? 0)}</dd>
-                    <dt className="text-slate-500">Format</dt><dd className="font-mono">{audioMeta?.format ?? "unknown"}</dd>
-                    <dt className="text-slate-500">Duration</dt>
-                    <dd>
-                      <DurationProbe url={soundUrls[selected] ?? previewUrl} />
-                    </dd>
-                  </dl>
-                  {(soundUrls[selected] ?? previewUrl) && (
-                    <audio controls src={soundUrls[selected] ?? previewUrl} className="w-full max-w-lg" preload="metadata" />
-                  )}
-                  <p className="text-[11.5px] text-slate-500">Sounds are never converted. Replace/Delete/Add/Download preserve bytes exactly.</p>
-                </div>
-              )}
-
-              {selIsText && (
-                <div>
-                  <textarea value={modelText} onChange={(e) => setModelText(e.target.value)} rows={18} spellCheck={false} aria-label={`Edit ${selected}`} className="w-full rounded-md border border-slate-200 bg-slate-50 p-2 font-mono text-[12px] dark:border-slate-700 dark:bg-slate-950" />
-                  <button onClick={saveTextFile} className="mt-2 rounded-md bg-slate-900 px-3 py-1.5 text-[13px] font-semibold text-white dark:bg-slate-100 dark:text-slate-900">Save file</button>
-                </div>
-              )}
-
-              {!selIsPng && !selIsJson && !selIsAudio && !selIsText && selected !== "pack.mcmeta" && (
-                <p className="text-[13px] text-slate-500">Binary file ({formatBytes(files.get(selected)?.length ?? 0)}). Use Replace or Download.</p>
-              )}
+                )}
+                {selIsText && (
+                  <div className="flex min-h-full flex-col">
+                    <textarea value={modelText} onChange={(e) => setModelText(e.target.value)} rows={20} spellCheck={false} aria-label={`Edit ${selected}`} className="w-full flex-1 rounded border p-2 font-mono text-[12px] outline-none" style={{ borderColor: "var(--border)", background: "var(--panel)" }} />
+                  </div>
+                )}
+                {!selIsPng && !selIsJson && !selIsAudio && !selIsText && selected !== "pack.mcmeta" && (
+                  <EmptyState title="Binary file" body={`${formatBytes(files.get(selected)?.length ?? 0)} — use Replace or Download.`} />
+                )}
+              </div>
             </div>
           )}
         </section>
+
+        <div className="hidden lg:block"><Resizer onResize={(dx) => setPropsW((w) => Math.min(360, Math.max(200, w - dx)))} /></div>
+
+        {/* properties */}
+        <aside
+          aria-label="Properties"
+          className="min-h-0 overflow-y-auto border-t p-3 lg:border-t-0 lg:border-s"
+          style={{ borderColor: "var(--border)", background: "var(--panel)", ...(isDesktop ? { width: propsW, flex: "none" } : {}) }}
+        >
+          <h2 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--faint)" }}>Properties</h2>
+          {selected && files.get(selected) ? (
+            <dl className="flex flex-col gap-1.5 text-[12.5px]">
+              <Prop label="Name" mono>{baseOf(selected)}</Prop>
+              <Prop label="Path" mono breakAll>{selected}</Prop>
+              <Prop label="Size" mono>{formatBytes(files.get(selected)!.length)}</Prop>
+              {imgDims && <Prop label="Dimensions" mono>{imgDims[0]} × {imgDims[1]} px</Prop>}
+              {imgDims && <Prop label="Zoom" mono>{zoom * 100}%</Prop>}
+              {audioMeta && <Prop label="Format" mono>{audioMeta.format}</Prop>}
+              {selIsJson && <Prop label="JSON" mono>{parsedModel ? "valid" : "invalid"}</Prop>}
+            </dl>
+          ) : (
+            <p className="text-[12.5px]" style={{ color: "var(--muted)" }}>Select a file to inspect it.</p>
+          )}
+          <h2 className="mb-2 mt-4 text-[11px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--faint)" }}>Pack</h2>
+          <dl className="flex flex-col gap-1.5 text-[12.5px]">
+            <Prop label="Files" mono>{files.size}</Prop>
+            <Prop label="Total" mono>{formatBytes(totalBytes)}</Prop>
+            <Prop label="Format" mono>{mcmetaSummary.format ?? "—"}</Prop>
+            {mcmetaSummary.desc && <Prop label="Description">{mcmetaSummary.desc}</Prop>}
+            <Prop label="Target" mono>{mcVersion}</Prop>
+          </dl>
+        </aside>
       </div>
+
+      <StatusBar
+        items={[
+          <span key="n">{packName}.zip</span>,
+          dirty ? <span key="s" style={{ color: "var(--warn)" }}>● Unsaved</span> : <span key="s">Saved locally</span>,
+          selected && <span key="f" className="truncate">{selected}</span>,
+          imgDims && selIsPng ? <span key="d">{imgDims[0]}×{imgDims[1]} · {zoom * 100}%</span> : null,
+          <span key="c">{files.size} files</span>,
+        ]}
+      />
+
+      {ctx && (
+        <ContextMenu
+          x={ctx.x}
+          y={ctx.y}
+          items={ctxItems(ctx.path, ctx.isDir)}
+          onClose={() => setCtx(null)}
+        />
+      )}
+      <input ref={zipInput} type="file" accept=".zip" className="hidden" onChange={async (e) => { if (e.target.files) await importZip([...e.target.files]); e.target.value = ""; }} aria-hidden />
+      <input ref={addInput} type="file" multiple className="hidden" onChange={async (e) => { if (e.target.files) await addFiles([...e.target.files]); e.target.value = ""; }} aria-hidden />
     </div>
+  );
+}
+
+function Prop({ label, children, mono, breakAll }: { label: string; children: React.ReactNode; mono?: boolean; breakAll?: boolean }) {
+  return (
+    <div className="flex gap-2">
+      <dt className="w-20 shrink-0" style={{ color: "var(--muted)" }}>{label}</dt>
+      <dd className={`min-w-0 flex-1 ${mono ? "font-mono text-[12px]" : ""} ${breakAll ? "break-all" : "truncate"}`} title={typeof children === "string" ? children : undefined}>
+        {children}
+      </dd>
+    </div>
+  );
+}
+
+function TreeNodeView({ node, depth, expanded, toggle, selected, onSelect, onCtx }: {
+  node: TreeNode;
+  depth: number;
+  expanded: Set<string>;
+  toggle: (p: string) => void;
+  selected: string | null;
+  onSelect: (p: string) => void;
+  onCtx: (e: React.MouseEvent, path: string, isDir: boolean) => void;
+}) {
+  return (
+    <ul role={depth === 0 ? undefined : "group"}>
+      {node.dirs.map((d) => {
+        const open = expanded.has(d.path);
+        return (
+          <li key={d.path} role="treeitem" aria-expanded={open}>
+            <div
+              className="file-row ui-transition flex cursor-pointer items-center gap-1 rounded px-1 py-[5px]"
+              data-active={false}
+              style={{ paddingInlineStart: 4 + depth * 14 }}
+              onClick={() => toggle(d.path)}
+              onContextMenu={(e) => onCtx(e, d.path, true)}
+            >
+              {open
+                ? <ChevronDown className="size-3.5 shrink-0" aria-hidden style={{ color: "var(--faint)" }} />
+                : <ChevronRight className="size-3.5 shrink-0 rtl:rotate-180" aria-hidden style={{ color: "var(--faint)" }} />}
+              {open
+                ? <FolderOpen className="size-3.5 shrink-0" aria-hidden style={{ color: "var(--warn)" }} />
+                : <Folder className="size-3.5 shrink-0" aria-hidden style={{ color: "var(--warn)" }} />}
+              <span className="truncate text-[12.5px] font-medium">{d.name}</span>
+            </div>
+            {open && (
+              <TreeNodeView node={d} depth={depth + 1} expanded={expanded} toggle={toggle} selected={selected} onSelect={onSelect} onCtx={onCtx} />
+            )}
+          </li>
+        );
+      })}
+      {node.files.map((f) => {
+        const Icon = fileIcon(f);
+        const active = selected === f;
+        return (
+          <li key={f} role="treeitem" aria-selected={active}>
+            <button
+              onClick={() => onSelect(f)}
+              onContextMenu={(e) => onCtx(e, f, false)}
+              className="file-row ui-transition flex w-full items-center gap-1.5 rounded px-1 py-[5px] text-start"
+              data-active={active}
+              style={{ paddingInlineStart: 4 + depth * 14 + 18, color: active ? "var(--text)" : "var(--muted)" }}
+              aria-current={active ? "true" : undefined}
+            >
+              <Icon className="size-3.5 shrink-0" aria-hidden style={{ color: active ? "var(--accent)" : "var(--faint)" }} />
+              <span className="truncate font-mono text-[12px]">{baseOf(f)}</span>
+            </button>
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 
@@ -633,7 +953,3 @@ function DurationProbe({ url }: { url: string }) {
   }, [url]);
   return <span className="font-mono">{dur}</span>;
 }
-
-// keep canvasToBlob import used (pack.png quick ops reuse texture path)
-void canvasToBlob;
-void blobToDataUrl;

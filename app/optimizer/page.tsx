@@ -1,12 +1,13 @@
 "use client";
 import { useCallback, useState } from "react";
 import JSZip from "jszip";
-import { Gauge, Download, Trash2 } from "lucide-react";
+import { Download, Trash2 } from "lucide-react";
 import { useApp } from "@/components/Providers";
 import { Dropzone } from "@/components/Dropzone";
 import { loadZipSafely } from "@/lib/zip-safety";
 import { analyzePack, type OptimizeResult } from "@/lib/optimize-pack";
 import { formatBytes, downloadBlob } from "@/lib/pixel-utils";
+import { Btn } from "@/components/ui";
 
 export default function OptimizerPage() {
   const { notify } = useApp();
@@ -35,7 +36,7 @@ export default function OptimizerPage() {
       setRaw(list);
       setName(f.name.replace(/\.zip$/i, ""));
       setRemoved([]);
-      notify("Validation complete");
+      notify("Analysis complete");
     } catch (e) {
       notify(e instanceof Error ? e.message : "Analysis failed", "err");
     } finally {
@@ -48,7 +49,6 @@ export default function OptimizerPage() {
     const doomed = new Set(
       result.findings.filter((x) => x.fixable).map((x) => x.file)
     );
-    // Never delete pack.mcmeta; keep first copy of duplicates (findings already list only dupes)
     doomed.delete("pack.mcmeta");
     if (doomed.size === 0) { notify("Nothing safe to remove.", "info"); return; }
     if (!confirm(`Remove ${doomed.size} file(s)? The original .zip is never modified — a new optimized .zip is created.`)) return;
@@ -71,41 +71,43 @@ export default function OptimizerPage() {
   }, [result, raw, name, notify]);
 
   return (
-    <div className="flex flex-col gap-4">
-      <div>
-        <h1 className="flex items-center gap-2 text-[20px] font-bold tracking-tight"><Gauge className="size-5 text-emerald-600" aria-hidden /> Pack Optimizer</h1>
-        <p className="text-[13px] text-slate-500 dark:text-slate-400">Finds duplicates, leftovers, huge textures, broken JSON and invalid files. Nothing is deleted without confirmation, and the original is never touched. <span className="rounded border border-slate-200 px-1.5 py-0.5 text-[11px] dark:border-slate-700">Local</span></p>
-      </div>
-      <Dropzone accept=".zip" onFiles={run} label="Drop a .zip to analyze" hint="Duplicate detection uses content hashing · large-file safe" compact />
-      {busy && <p className="text-[13px] text-slate-500" role="status">Working…</p>}
+    <div className="mx-auto flex w-full max-w-3xl flex-col gap-3">
+      <p className="text-[13px]" style={{ color: "var(--muted)" }}>
+        Finds duplicates, leftovers, huge textures, broken JSON and invalid files. Nothing is deleted without confirmation. <span className="rounded border px-1 font-mono text-[11px]" style={{ borderColor: "var(--border)" }}>Local</span>
+      </p>
+      <Dropzone accept=".zip" onFiles={run} label={busy ? "Analyzing…" : "Drop a .zip to analyze"} hint="Duplicate detection uses content hashing · large-file safe" compact />
+
       {result && (
-        <section className="rounded-md border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900">
-          <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 px-3 py-2.5 dark:border-slate-700">
-            <span className="text-[13.5px] font-bold">{name} — {formatBytes(result.totalBytes)} total</span>
-            <span className="text-[12.5px] text-slate-500">{result.findings.length} findings · {formatBytes(result.reclaimableBytes)} safely removable</span>
-            <button onClick={optimize} className="ms-auto flex items-center gap-1.5 rounded-md bg-emerald-600 px-3 py-1.5 text-[13px] font-semibold text-white hover:bg-emerald-700">
-              <Download className="size-4" aria-hidden /> Optimize Pack
-            </button>
+        <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", background: "var(--panel)", overflow: "hidden" }}>
+          <div className="flex flex-wrap items-center gap-2 border-b px-3 py-2" style={{ borderColor: "var(--border)" }}>
+            <span className="text-[13.5px] font-bold">{name} · {formatBytes(result.totalBytes)}</span>
+            <span className="font-mono text-[11.5px]" style={{ color: "var(--muted)" }}>
+              {result.findings.length} findings · {formatBytes(result.reclaimableBytes)} safely removable
+            </span>
+            <span className="ms-auto">
+              <Btn primary onClick={optimize} disabled={!result.findings.some((x) => x.fixable)}>
+                <Download className="size-4" aria-hidden /> Optimize Pack
+              </Btn>
+            </span>
           </div>
-          {result.findings.length === 0 ? (
-            <p className="p-4 text-[13px] text-slate-500">No issues found. This pack is already lean.</p>
-          ) : (
-            <ul className="divide-y divide-slate-100 dark:divide-slate-800">
-              {result.findings.map((f, i) => (
-                <li key={i} className="flex items-start gap-2.5 px-3 py-2 text-[12.5px]">
-                  <Trash2 className={`mt-0.5 size-4 shrink-0 ${f.fixable ? "text-emerald-600" : "text-slate-400"}`} aria-hidden />
-                  <div className="min-w-0 flex-1">
-                    <span className="me-2 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] dark:bg-slate-800">{f.kind}</span>
-                    <span className="font-mono font-bold break-all">{f.file}</span>
-                    <span className="block text-slate-600 dark:text-slate-300">{f.detail}</span>
-                    {removed.includes(f.file) && <span className="text-emerald-600">Removed in optimized .zip.</span>}
-                  </div>
-                  <span className="shrink-0 font-mono text-[11.5px] text-slate-500">{f.bytes ? formatBytes(f.bytes) : "—"}</span>
-                </li>
-              ))}
-            </ul>
+          <ul className="divide-y" style={{ borderColor: "var(--border)" }} aria-label="Findings">
+            {result.findings.map((f, i) => (
+              <li key={i} className="flex items-start gap-2.5 px-3 py-2">
+                <Trash2 className="mt-0.5 size-4 shrink-0" aria-hidden style={{ color: f.fixable ? "var(--accent)" : "var(--faint)" }} />
+                <span className="min-w-0 flex-1">
+                  <span className="me-2 rounded px-1.5 py-px font-mono text-[11px]" style={{ background: "var(--panel-2)", color: "var(--muted)" }}>{f.kind}</span>
+                  <span className="font-mono text-[12.5px] font-bold break-all">{f.file}</span>
+                  <span className="block text-[12.5px]" style={{ color: "var(--muted)" }}>{f.detail}</span>
+                  {removed.includes(f.file) && <span className="text-[12px]" style={{ color: "var(--accent)" }}>Removed in optimized .zip.</span>}
+                </span>
+                <span className="shrink-0 font-mono text-[11.5px]" style={{ color: "var(--faint)" }}>{f.bytes ? formatBytes(f.bytes) : "—"}</span>
+              </li>
+            ))}
+          </ul>
+          {result.findings.length === 0 && (
+            <p className="px-3 py-6 text-center text-[13px]" style={{ color: "var(--muted)" }}>No issues found. This pack is already lean.</p>
           )}
-        </section>
+        </div>
       )}
     </div>
   );

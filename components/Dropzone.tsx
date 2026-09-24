@@ -27,19 +27,26 @@ export function Dropzone({ accept, multiple, onFiles, label, hint, compact }: Pr
       tabIndex={0}
       aria-label={label}
       onClick={() => input.current?.click()}
-      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") input.current?.click(); }}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); input.current?.click(); } }}
       onDragOver={(e) => { e.preventDefault(); setOver(true); }}
       onDragLeave={() => setOver(false)}
       onDrop={(e) => { e.preventDefault(); setOver(false); handle(e.dataTransfer.files); }}
-      className={`flex cursor-pointer flex-col items-center justify-center gap-1.5 rounded-md border border-dashed text-center transition-colors ${
-        compact ? "px-4 py-5" : "px-6 py-9"
-      } ${over ? "border-emerald-500 bg-emerald-50 dark:bg-emerald-950/30" : "border-slate-300 hover:border-slate-400 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-900"}`}
+      className="ui-transition flex cursor-pointer flex-col items-center justify-center gap-1 rounded border border-dashed text-center"
+      style={{
+        padding: compact ? "16px 20px" : "26px 22px",
+        borderColor: over ? "var(--accent)" : "var(--border-strong)",
+        background: over ? "var(--accent-soft)" : "transparent",
+      }}
     >
-      <span className="grid size-9 place-items-center rounded-md bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900">
-        <Upload className="size-4" aria-hidden />
+      <span
+        className="grid size-8 place-items-center rounded"
+        style={{ background: "var(--text)", color: "var(--panel)" }}
+        aria-hidden
+      >
+        <Upload className="size-4" />
       </span>
       <span className="text-[13.5px] font-semibold">{label}</span>
-      {hint && <span className="max-w-100 text-[12px] text-slate-500 dark:text-slate-400">{hint}</span>}
+      {hint && <span className="max-w-[420px] text-[12px]" style={{ color: "var(--muted)" }}>{hint}</span>}
       <input
         ref={input}
         type="file"

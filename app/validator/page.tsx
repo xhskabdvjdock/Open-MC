@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useState } from "react";
-import { ShieldCheck, CheckCircle2, AlertTriangle, XCircle, Info } from "lucide-react";
+import { CheckCircle2, AlertTriangle, XCircle } from "lucide-react";
 import { useApp } from "@/components/Providers";
 import { Dropzone } from "@/components/Dropzone";
 import { loadZipSafely } from "@/lib/zip-safety";
@@ -38,65 +38,85 @@ export default function ValidatorPage() {
   }, [mcVersion, notify]);
 
   return (
-    <div className="flex flex-col gap-4">
-      <div>
-        <h1 className="flex items-center gap-2 text-[20px] font-bold tracking-tight"><ShieldCheck className="size-5 text-emerald-600" aria-hidden /> Resource Pack Validator</h1>
-        <p className="text-[13px] text-slate-500 dark:text-slate-400">Real checks against <span className="font-mono">pack.mcmeta</span>, folder structure, JSON syntax and model shape — for version <span className="font-mono font-bold">{mcVersion}</span>. Runs 100% locally. <span className="rounded border border-slate-200 px-1.5 py-0.5 text-[11px] dark:border-slate-700">Local</span></p>
-      </div>
-      <Dropzone accept=".zip" onFiles={run} label="Drop a .zip to validate" hint="Nothing is uploaded — parsed in your browser" compact />
-      {busy && <p className="text-[13px] text-slate-500" role="status">Validating…</p>}
+    <div className="mx-auto flex w-full max-w-3xl flex-col gap-3">
+      <p className="text-[13px]" style={{ color: "var(--muted)" }}>
+        Checks <span className="font-mono">pack.mcmeta</span>, structure, JSON syntax and model shape for <span className="font-mono font-bold">{mcVersion}</span> — 100% locally.
+      </p>
+      <Dropzone accept=".zip" onFiles={run} label={busy ? "Validating…" : "Drop a .zip to validate"} hint="Nothing is uploaded — parsed in your browser" compact />
+
       {report && (
-        <section aria-label="Validation report" className="rounded-md border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900">
-          <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 px-3 py-2.5 dark:border-slate-700">
-            <span className={`flex items-center gap-1.5 rounded px-2 py-1 text-[13px] font-bold ${report.ok ? "bg-emerald-600/10 text-emerald-700 dark:text-emerald-300" : "bg-red-600/10 text-red-700 dark:text-red-300"}`}>
+        <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", background: "var(--panel)", overflow: "hidden" }}>
+          <div className="flex flex-wrap items-center gap-2 border-b px-3 py-2" style={{ borderColor: "var(--border)" }}>
+            <span className="flex items-center gap-1.5 text-[13px] font-bold" style={{ color: report.ok ? "var(--accent)" : "var(--danger)" }}>
               {report.ok ? <CheckCircle2 className="size-4" aria-hidden /> : <XCircle className="size-4" aria-hidden />}
-              {report.ok ? "Pack looks valid" : "Problems found"} — {name}
+              {report.ok ? "Valid" : "Problems found"}
             </span>
-            <span className="ms-auto text-[12px] text-slate-500">{report.checkedFiles} files checked</span>
+            <span className="font-mono text-[12px]" style={{ color: "var(--muted)" }}>{name}</span>
+            <span className="ms-auto flex gap-3 font-mono text-[12px]" style={{ color: "var(--muted)" }}>
+              <span><b style={{ color: "var(--danger)" }}>{report.errors.length}</b> errors</span>
+              <span><b style={{ color: "var(--warn)" }}>{report.warnings.length}</b> warnings</span>
+              <span>{report.checkedFiles} files</span>
+            </span>
           </div>
-          <div className="grid gap-3 p-3 md:grid-cols-3">
-            <IssueList title="Errors" icon={XCircle} color="text-red-600" items={report.errors} focus={focus} setFocus={setFocus} empty="No errors." />
-            <IssueList title="Warnings" icon={AlertTriangle} color="text-amber-600" items={report.warnings} focus={focus} setFocus={setFocus} empty="No warnings." />
-            <IssueList title="Info" icon={Info} color="text-sky-600" items={report.infos} focus={focus} setFocus={setFocus} empty="Nothing to note." />
-          </div>
+          <ProblemList
+            items={[
+              ...report.errors.map((e) => ({ ...e, level: "error" as const })),
+              ...report.warnings.map((e) => ({ ...e, level: "warning" as const })),
+              ...report.infos.map((e) => ({ ...e, level: "info" as const })),
+            ]}
+            focus={focus}
+            setFocus={setFocus}
+          />
           {focus && (
-            <p className="border-t border-slate-200 px-3 py-2 font-mono text-[12px] dark:border-slate-700" role="status">
-              Selected file: <span className="font-bold">{focus}</span> — open it in Resource Pack Studio to fix.
+            <p className="border-t px-3 py-2 font-mono text-[12px]" style={{ borderColor: "var(--border)" }} role="status">
+              <span className="font-bold">{focus}</span> — open it in Resource Pack Studio to fix.
             </p>
           )}
-        </section>
+          {report.errors.length === 0 && report.warnings.length === 0 && (
+            <div className="flex items-center gap-2 px-3 py-3 text-[13px]" style={{ color: "var(--accent)" }}>
+              <CheckCircle2 className="size-4" aria-hidden /> pack.mcmeta valid · structure valid · {report.checkedFiles} files checked
+            </div>
+          )}
+        </div>
+      )}
+      {!report && !busy && (
+        <p className="text-[12.5px]" style={{ color: "var(--faint)" }}>
+          No pack loaded. Drop a <span className="font-mono">.zip</span> above to run diagnostics.
+        </p>
       )}
     </div>
   );
 }
 
-function IssueList({ title, icon: Icon, color, items, focus, setFocus, empty }: {
-  title: string; icon: React.ElementType; color: string;
-  items: { file: string; message: string; line?: number }[];
-  focus: string | null; setFocus: (f: string | null) => void; empty: string;
+function ProblemList({ items, focus, setFocus }: {
+  items: { level: "error" | "warning" | "info"; file: string; message: string; line?: number }[];
+  focus: string | null;
+  setFocus: (f: string | null) => void;
 }) {
+  if (items.length === 0) return null;
+  const icon = (l: string) =>
+    l === "error"
+      ? <XCircle className="size-4 shrink-0" aria-hidden style={{ color: "var(--danger)" }} />
+      : l === "warning"
+        ? <AlertTriangle className="size-4 shrink-0" aria-hidden style={{ color: "var(--warn)" }} />
+        : <CheckCircle2 className="size-4 shrink-0" aria-hidden style={{ color: "var(--accent)" }} />;
   return (
-    <div>
-      <h2 className={`mb-1.5 flex items-center gap-1.5 text-[13px] font-bold ${color}`}>
-        <Icon className="size-4" aria-hidden /> {title} ({items.length})
-      </h2>
-      {items.length === 0 ? (
-        <p className="text-[12.5px] text-slate-500">{empty}</p>
-      ) : (
-        <ul className="flex flex-col gap-1.5">
-          {items.map((it, i) => (
-            <li key={i}>
-              <button
-                onClick={() => setFocus(focus === it.file ? null : it.file)}
-                className={`w-full rounded-md border px-2.5 py-2 text-start text-[12.5px] hover:border-emerald-500 dark:hover:border-emerald-500 ${focus === it.file ? "border-emerald-500 bg-emerald-50 dark:bg-emerald-950/30" : "border-slate-200 dark:border-slate-700"}`}
-              >
-                <span className="block truncate font-mono font-bold">{it.file}{it.line ? `:${it.line}` : ""}</span>
-                <span className="block text-slate-600 dark:text-slate-300">{it.message}</span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
+    <ul className="divide-y" style={{ borderColor: "var(--border)" }} aria-label="Problems">
+      {items.map((it, i) => (
+        <li key={i}>
+          <button
+            onClick={() => setFocus(focus === it.file ? null : it.file)}
+            className="ui-transition flex w-full items-start gap-2.5 px-3 py-2 text-start"
+            style={{ background: focus === it.file ? "var(--panel-2)" : "transparent" }}
+          >
+            {icon(it.level)}
+            <span className="min-w-0 flex-1">
+              <span className="block truncate font-mono text-[12.5px] font-bold">{it.file}{it.line ? `:${it.line}` : ""}</span>
+              <span className="block text-[12.5px]" style={{ color: "var(--muted)" }}>{it.message}</span>
+            </span>
+          </button>
+        </li>
+      ))}
+    </ul>
   );
 }

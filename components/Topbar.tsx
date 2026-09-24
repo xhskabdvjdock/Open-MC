@@ -1,108 +1,121 @@
 "use client";
-import { Menu, Search, Sun, Moon, Laptop, Languages } from "lucide-react";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { Menu, Search, Settings as SettingsIcon, CircleDot } from "lucide-react";
 import { useApp } from "./Providers";
-import { useRouter, usePathname } from "next/navigation";
 
-const TOOL_INDEX = [
-  { href: "/resource-pack", en: "Resource Pack Studio pack zip explorer texture", ar: "حزمة الموارد" },
-  { href: "/skin", en: "Skin Studio steve alex 3d editor", ar: "السكن" },
-  { href: "/pixel-art", en: "Pixel Art canvas image converter", ar: "فن البكسل" },
-  { href: "/model", en: "Model Studio json blockbench 3d", ar: "موديل" },
-  { href: "/textures", en: "Texture Tools resize crop rotate pixelate", ar: "الخامات" },
-  { href: "/json", en: "JSON NBT formatter validator minifier viewer", ar: "جسون" },
-  { href: "/commands", en: "Commands give summon tp effect enchant", ar: "الأوامر" },
-  { href: "/profile", en: "Profile username uuid skin cape", ar: "الملف الشخصي" },
-  { href: "/server", en: "Server status motd icon java bedrock", ar: "السيرفر" },
-  { href: "/validator", en: "Validator pack.mcmeta check", ar: "المدقق" },
-  { href: "/optimizer", en: "Optimizer duplicates size", ar: "المحسن" },
-  { href: "/versions", en: "Version pack format 1.21 1.20", ar: "الإصدارات" },
-];
+const CRUMBS: Record<string, string> = {
+  "": "home",
+  projects: "projects",
+  "resource-pack": "resourcePack",
+  skin: "skinStudio",
+  "pixel-art": "pixelArt",
+  model: "modelStudio",
+  textures: "textureTools",
+  json: "jsonNbt",
+  commands: "commands",
+  profile: "profile",
+  server: "serverTools",
+  validator: "validator",
+  optimizer: "optimizer",
+  versions: "versionTools",
+  settings: "settings",
+};
 
 export function Topbar() {
-  const { t, lang, setLang, theme, setTheme, query, setQuery, setSidebarOpen } = useApp();
-  const router = useRouter();
+  const { t, lang, setLang, setSidebarOpen, setPaletteOpen, project } = useApp();
   const pathname = usePathname();
+  const segs = pathname.split("/").filter(Boolean);
+  const s = (k: string) => (t as unknown as Record<string, string>)[k] ?? k;
 
-  const results = query.trim()
-    ? TOOL_INDEX.filter((x) =>
-        (x.en + " " + x.ar + " " + x.href).toLowerCase().includes(query.trim().toLowerCase())
-      ).slice(0, 7)
-    : [];
+  const crumbTrail = [{ href: "/", label: s(CRUMBS[""]) }, ...segs.map((seg, i) => ({
+    href: "/" + segs.slice(0, i + 1).join("/"),
+    label: s(CRUMBS[seg] ?? seg),
+  }))];
 
   return (
-    <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/95 backdrop-blur dark:border-slate-800 dark:bg-slate-950/95">
-      <div className="flex h-13 items-center gap-2 px-3 py-2 sm:px-4">
+    <header
+      className="sticky top-0 z-40 border-b"
+      style={{ borderColor: "var(--border)", background: "var(--panel)" }}
+    >
+      <div className="flex h-12 items-center gap-1.5 px-2.5 sm:px-3.5">
         <button
-          className="rounded-md p-2 hover:bg-slate-100 md:hidden dark:hover:bg-slate-800"
+          className="ui-transition rounded p-2 md:hidden"
+          style={{ color: "var(--muted)" }}
           onClick={() => setSidebarOpen(true)}
           aria-label="Open menu"
         >
-          <Menu className="size-5" />
+          <Menu className="size-5" aria-hidden />
         </button>
-        <div className="relative hidden w-72 sm:block">
-          <Search className="pointer-events-none absolute start-2.5 top-1/2 size-4 -translate-y-1/2 text-slate-400" aria-hidden />
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && results[0]) {
-                router.push(results[0].href);
-                setQuery("");
-              }
-              if (e.key === "Escape") setQuery("");
-            }}
-            placeholder={t.searchPlaceholder}
-            aria-label={t.searchTools}
-            className="w-full rounded-md border border-slate-200 bg-slate-50 py-1.5 pe-3 ps-8 text-[13px] outline-none focus:border-emerald-500 dark:border-slate-700 dark:bg-slate-900"
-          />
-          {results.length > 0 && (
-            <div className="absolute start-0 top-full mt-1 w-full overflow-hidden rounded-md border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-900">
-              {results.map((r) => (
-                <button
-                  key={r.href}
-                  onClick={() => { router.push(r.href); setQuery(""); }}
-                  className="flex w-full items-center gap-2 px-3 py-2 text-start text-[13px] hover:bg-slate-100 dark:hover:bg-slate-800"
-                >
-                  <span className="font-mono text-[11px] text-slate-400">{r.href}</span>
-                  <span className="truncate">{r.en.split(" ").slice(0, 3).join(" ")}</span>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-        <div className="ms-auto flex items-center gap-1">
-          <span className="me-1 hidden rounded border border-slate-200 px-1.5 py-0.5 font-mono text-[11px] text-slate-500 lg:inline dark:border-slate-700 dark:text-slate-400" title={pathname}>
-            {pathname}
+
+        <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-1 text-[13px]">
+          {crumbTrail.map((c, i) => (
+            <span key={c.href + i} className="flex min-w-0 items-center gap-1">
+              {i > 0 && <span aria-hidden style={{ color: "var(--faint)" }}>/</span>}
+              {i === crumbTrail.length - 1 ? (
+                <span className="truncate font-semibold" aria-current="page">{c.label}</span>
+              ) : (
+                <Link href={c.href} className="ui-transition shrink-0 hover:underline" style={{ color: "var(--muted)" }}>
+                  {c.label}
+                </Link>
+              )}
+            </span>
+          ))}
+        </nav>
+
+        {project && (
+          <span
+            className="ms-2 hidden items-center gap-1.5 truncate rounded border px-2 py-[3px] font-mono text-[11.5px] sm:flex"
+            style={{ borderColor: "var(--border)", background: "var(--panel-2)", color: "var(--muted)" }}
+            title={`${project.kind} — ${project.name}${project.dirty ? " (unsaved changes)" : ""}`}
+          >
+            <CircleDot
+              className="size-3 shrink-0"
+              aria-hidden
+              style={{ color: project.dirty ? "var(--warn)" : "var(--accent)" }}
+            />
+            <span className="truncate">{project.name}</span>
+            {project.dirty && <span aria-label="Unsaved changes">•</span>}
           </span>
+        )}
+
+        <div className="ms-auto flex items-center gap-0.5">
+          <button
+            onClick={() => setPaletteOpen(true)}
+            aria-label={s("searchTools")}
+            className="ui-transition hidden items-center gap-2 rounded border px-2.5 py-[5px] text-[12.5px] sm:flex"
+            style={{ borderColor: "var(--border)", background: "var(--panel-2)", color: "var(--muted)" }}
+          >
+            <Search className="size-3.5" aria-hidden />
+            <span>{s("searchTools")}</span>
+            <kbd className="rounded border px-1 font-mono text-[10px]" style={{ borderColor: "var(--border-strong)" }}>Ctrl K</kbd>
+          </button>
+          <button
+            onClick={() => setPaletteOpen(true)}
+            aria-label={s("searchTools")}
+            className="ui-transition rounded p-2 sm:hidden"
+            style={{ color: "var(--muted)" }}
+          >
+            <Search className="size-[18px]" aria-hidden />
+          </button>
           <button
             onClick={() => setLang(lang === "en" ? "ar" : "en")}
-            aria-label="Switch language"
-            title={t.language}
-            className="flex items-center gap-1 rounded-md px-2 py-1.5 text-[13px] font-semibold hover:bg-slate-100 dark:hover:bg-slate-800"
+            aria-label={s("language")}
+            title={s("language")}
+            className="ui-transition rounded px-2 py-2 text-[12.5px] font-bold"
+            style={{ color: "var(--muted)" }}
           >
-            <Languages className="size-4" aria-hidden />
             {lang === "en" ? "ع" : "EN"}
           </button>
-          <div className="flex items-center rounded-md border border-slate-200 p-0.5 dark:border-slate-700" role="group" aria-label={t.appearance}>
-            {(
-              [
-                { v: "dark", Icon: Moon },
-                { v: "light", Icon: Sun },
-                { v: "system", Icon: Laptop },
-              ] as const
-            ).map(({ v, Icon }) => (
-              <button
-                key={v}
-                onClick={() => setTheme(v)}
-                aria-label={v}
-                aria-pressed={theme === v}
-                title={v}
-                className={`rounded p-1.5 ${theme === v ? "bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900" : "text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"}`}
-              >
-                <Icon className="size-4" aria-hidden />
-              </button>
-            ))}
-          </div>
+          <Link
+            href="/settings"
+            aria-label={s("settings")}
+            title={s("settings")}
+            className="ui-transition rounded p-2"
+            style={{ color: pathname === "/settings" ? "var(--accent)" : "var(--muted)" }}
+          >
+            <SettingsIcon className="size-[18px]" aria-hidden />
+          </Link>
         </div>
       </div>
     </header>

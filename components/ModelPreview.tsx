@@ -17,8 +17,6 @@ export interface McModel {
   ambientocclusion?: boolean;
 }
 
-// Renders block-model `elements` as CSS-3D boxes with neutral material when
-// textures can't be resolved (honest: labels show texture variable instead of fake art).
 const PALETTE = ["#8ecae6", "#90be6d", "#f9c74f", "#f3722c", "#f94144", "#577590", "#b56576", "#6d597a"];
 
 export function ModelPreview({ model }: { model: McModel | null }) {
@@ -44,14 +42,20 @@ export function ModelPreview({ model }: { model: McModel | null }) {
 
   if (!model) {
     return (
-      <div className="grid h-64 place-items-center rounded-md border border-dashed border-slate-300 text-[13px] text-slate-500 dark:border-slate-700 dark:text-slate-400">
+      <div
+        className="grid h-64 place-items-center rounded border border-dashed text-[13px]"
+        style={{ borderColor: "var(--border-strong)", color: "var(--muted)" }}
+      >
         No model loaded
       </div>
     );
   }
   if (!elements.length) {
     return (
-      <div className="flex h-64 flex-col items-center justify-center gap-2 rounded-md border border-amber-500/40 bg-amber-50 p-4 text-center text-[13px] text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+      <div
+        className="flex h-64 flex-col items-center justify-center gap-2 rounded border p-4 text-center text-[13px]"
+        style={{ borderColor: "var(--warn)", background: "color-mix(in oklab, var(--warn) 10%, var(--panel))", color: "var(--warn)" }}
+      >
         <AlertTriangle className="size-5" aria-hidden />
         <p className="font-semibold">Preview unavailable</p>
         <p className="max-w-80 text-[12px] opacity-90">
@@ -61,12 +65,12 @@ export function ModelPreview({ model }: { model: McModel | null }) {
     );
   }
 
-  const K = 9; // px per model unit
+  const K = 9;
   return (
     <div className="flex flex-col gap-2">
       <div
-        className="relative mx-auto w-full cursor-grab overflow-hidden rounded-md border border-slate-200 bg-slate-100 active:cursor-grabbing dark:border-slate-700 dark:bg-slate-950"
-        style={{ height: 360, perspective: 1000 }}
+        className="relative mx-auto w-full cursor-grab overflow-hidden rounded border active:cursor-grabbing"
+        style={{ height: 360, perspective: 1000, borderColor: "var(--border)", background: "var(--panel-2)" }}
         onPointerDown={(e) => {
           (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
           drag.current = { x: e.clientX, y: e.clientY, yaw, pitch };
@@ -101,15 +105,15 @@ export function ModelPreview({ model }: { model: McModel | null }) {
             );
           })}
         </div>
-        <div className="absolute bottom-2 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-md border border-slate-200 bg-white/95 p-1 dark:border-slate-700 dark:bg-slate-900/95">
-          <button onClick={() => setZoom((z) => Math.max(0.4, +(z - 0.15).toFixed(2)))} aria-label="Zoom out" className="rounded p-1.5 hover:bg-slate-100 dark:hover:bg-slate-800"><ZoomOut className="size-3.5" /></button>
-          <span className="font-mono text-[12px]">{Math.round(zoom * 100)}%</span>
-          <button onClick={() => setZoom((z) => Math.min(3, +(z + 0.15).toFixed(2)))} aria-label="Zoom in" className="rounded p-1.5 hover:bg-slate-100 dark:hover:bg-slate-800"><ZoomIn className="size-3.5" /></button>
-          <button onClick={() => setYaw((y) => y + 45)} aria-label="Rotate" className="rounded p-1.5 hover:bg-slate-100 dark:hover:bg-slate-800"><RotateCw className="size-3.5" /></button>
+        <div className="absolute bottom-2 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded border p-1" style={{ borderColor: "var(--border)", background: "var(--panel)" }}>
+          <button onClick={() => setZoom((z) => Math.max(0.4, +(z - 0.15).toFixed(2)))} aria-label="Zoom out" className="ui-transition rounded p-1.5 hover:opacity-70"><ZoomOut className="size-3.5" aria-hidden style={{ color: "var(--muted)" }} /></button>
+          <span className="font-mono text-[12px]" style={{ color: "var(--muted)" }}>{Math.round(zoom * 100)}%</span>
+          <button onClick={() => setZoom((z) => Math.min(3, +(z + 0.15).toFixed(2)))} aria-label="Zoom in" className="ui-transition rounded p-1.5 hover:opacity-70"><ZoomIn className="size-3.5" aria-hidden style={{ color: "var(--muted)" }} /></button>
+          <button onClick={() => setYaw((y) => y + 45)} aria-label="Rotate" className="ui-transition rounded p-1.5 hover:opacity-70"><RotateCw className="size-3.5" aria-hidden style={{ color: "var(--muted)" }} /></button>
         </div>
       </div>
-      <p className="text-center text-[11px] text-slate-500 dark:text-slate-400">
-        {elements.length} element{elements.length === 1 ? "" : "s"} · neutral material (pack textures are referenced by name, not embedded)
+      <p className="text-center font-mono text-[11px]" style={{ color: "var(--faint)" }}>
+        {elements.length} element{elements.length === 1 ? "" : "s"} · neutral material (pack textures referenced by name)
       </p>
     </div>
   );

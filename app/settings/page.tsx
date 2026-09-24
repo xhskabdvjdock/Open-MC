@@ -1,10 +1,11 @@
 "use client";
 import { useEffect, useState } from "react";
-import { Settings as SettingsIcon, Trash2, HardDrive } from "lucide-react";
+import { HardDrive, Trash2 } from "lucide-react";
 import { useApp } from "@/components/Providers";
 import { MC_VERSIONS } from "@/lib/versions";
-import { kvGet } from "@/lib/storage";
+
 import { formatBytes } from "@/lib/pixel-utils";
+import { Btn, inputStyle, inputCls } from "@/components/ui";
 
 export default function SettingsPage() {
   const {
@@ -14,15 +15,16 @@ export default function SettingsPage() {
   const [usage, setUsage] = useState("");
 
   useEffect(() => {
+    let live = true;
     (async () => {
       try {
         if (navigator.storage?.estimate) {
           const est = await navigator.storage.estimate();
-          setUsage(`${formatBytes(est.usage ?? 0)} used${est.quota ? ` of ${formatBytes(est.quota)}` : ""}`);
+          if (live) setUsage(`${formatBytes(est.usage ?? 0)} used${est.quota ? ` of ${formatBytes(est.quota)}` : ""}`);
         }
-        await kvGet("lang", "en");
-      } catch { setUsage(""); }
+      } catch { if (live) setUsage(""); }
     })();
+    return () => { live = false; };
   }, []);
 
   const clearAutosaves = async () => {
@@ -41,72 +43,110 @@ export default function SettingsPage() {
   };
 
   return (
-    <div className="mx-auto flex max-w-2xl flex-col gap-4">
-      <h1 className="flex items-center gap-2 text-[20px] font-bold tracking-tight"><SettingsIcon className="size-5 text-emerald-600" aria-hidden /> Settings</h1>
+    <div className="mx-auto flex w-full max-w-2xl flex-col divide-y" style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", background: "var(--panel)", overflow: "hidden" }}>
+      <header className="px-4 py-3">
+        <h1 className="text-[15px] font-bold tracking-tight">Settings</h1>
+        <p className="text-[12.5px]" style={{ color: "var(--muted)" }}>
+          Compact, desktop-app style. <span className="font-mono">Ctrl+K</span> to search tools anywhere.
+        </p>
+      </header>
 
-      <SettingCard title="Appearance">
+      <FieldRow title="Appearance" desc="Light is a full light theme — not inverted dark.">
         <div className="flex gap-1.5" role="radiogroup" aria-label="Theme">
           {(["dark", "light", "system"] as const).map((v) => (
-            <button key={v} role="radio" aria-checked={theme === v} onClick={() => { setTheme(v); notify(`Theme: ${v}`); }} className={`rounded-md border px-3 py-1.5 text-[13px] font-semibold capitalize ${theme === v ? "border-emerald-600 bg-emerald-600 text-white" : "border-slate-200 hover:border-emerald-500 dark:border-slate-700"}`}>
+            <button
+              key={v}
+              role="radio"
+              aria-checked={theme === v}
+              onClick={() => { setTheme(v); notify(`Theme: ${v}`); }}
+              className="ui-transition rounded border px-3 py-1.5 text-[13px] font-semibold capitalize"
+              style={{
+                borderColor: theme === v ? "var(--accent)" : "var(--border)",
+                background: theme === v ? "var(--accent)" : "transparent",
+                color: theme === v ? "#fff" : "var(--text)",
+              }}
+            >
               {v}
             </button>
           ))}
         </div>
-        <p className="text-[12px] text-slate-500">Light mode is a full light theme — not an inverted dark mode.</p>
-      </SettingCard>
+      </FieldRow>
 
-      <SettingCard title="Language / اللغة">
+      <FieldRow title="Language / اللغة" desc="Arabic flips the entire layout (dir=rtl), including sidebar, breadcrumbs, and editors.">
         <div className="flex gap-1.5">
           {(["en", "ar"] as const).map((v) => (
-            <button key={v} onClick={() => { setLang(v); notify(v === "ar" ? "تم التبديل إلى العربية" : "Switched to English"); }} aria-pressed={lang === v} className={`rounded-md border px-3 py-1.5 text-[13px] font-semibold ${lang === v ? "border-emerald-600 bg-emerald-600 text-white" : "border-slate-200 hover:border-emerald-500 dark:border-slate-700"}`}>
+            <button
+              key={v}
+              onClick={() => { setLang(v); notify(v === "ar" ? "تم التبديل إلى العربية" : "Switched to English"); }}
+              aria-pressed={lang === v}
+              className="ui-transition rounded border px-3 py-1.5 text-[13px] font-semibold"
+              style={{
+                borderColor: lang === v ? "var(--accent)" : "var(--border)",
+                background: lang === v ? "var(--accent)" : "transparent",
+                color: lang === v ? "#fff" : "var(--text)",
+              }}
+            >
               {v === "en" ? "English" : "العربية (RTL)"}
             </button>
           ))}
         </div>
-        <p className="text-[12px] text-slate-500">Arabic flips the entire layout to right-to-left (dir=rtl).</p>
-      </SettingCard>
+      </FieldRow>
 
-      <SettingCard title="Minecraft version">
-        <select value={mcVersion} onChange={(e) => { setMcVersion(e.target.value); notify(`Target version: ${e.target.value}`); }} aria-label="Minecraft version" className="w-full rounded-md border border-slate-200 bg-white px-2.5 py-2 dark:border-slate-700 dark:bg-slate-950">
+      <FieldRow title="Minecraft version">
+        <select value={mcVersion} onChange={(e) => { setMcVersion(e.target.value); notify(`Target version: ${e.target.value}`); }} aria-label="Minecraft version" className={inputCls} style={inputStyle()}>
           {MC_VERSIONS.map((v) => <option key={v.id} value={v.id}>{v.label} ({v.id}) — pack_format {v.packFormat}</option>)}
         </select>
-      </SettingCard>
+      </FieldRow>
 
-      <SettingCard title="Editor preferences">
-        <label className="flex items-center gap-2 text-[13.5px]">
-          <input type="checkbox" checked={showGrid} onChange={(e) => setShowGrid(e.target.checked)} className="accent-emerald-600" />
-          Show pixel grid by default
-        </label>
-        <label className="flex items-center gap-2 text-[13.5px]">
-          <input type="checkbox" checked={autosave} onChange={(e) => setAutosave(e.target.checked)} className="accent-emerald-600" />
-          Autosave editors locally (IndexedDB)
-        </label>
-        <p className="text-[12px] text-slate-500">Keyboard: Ctrl+S save · Ctrl+Z undo · Ctrl+Shift+Z redo · Ctrl+O open · Ctrl+E export. Shortcuts are active inside editors that support them.</p>
-      </SettingCard>
+      <FieldRow title="Editor">
+        <div className="flex flex-col gap-2">
+          <label className="flex items-center gap-2 text-[13px]">
+            <input type="checkbox" checked={showGrid} onChange={(e) => setShowGrid(e.target.checked)} style={{ accentColor: "var(--accent)" }} />
+            Pixel grid on by default
+          </label>
+          <label className="flex items-center gap-2 text-[13px]">
+            <input type="checkbox" checked={autosave} onChange={(e) => setAutosave(e.target.checked)} style={{ accentColor: "var(--accent)" }} />
+            Autosave editors locally (IndexedDB)
+          </label>
+          <p className="text-[11.5px]" style={{ color: "var(--faint)" }}>
+            Shortcuts: <span className="font-mono">Ctrl+S</span> save · <span className="font-mono">Ctrl+Z</span> undo · <span className="font-mono">Ctrl+Shift+Z</span> redo ·
+            <span className="font-mono"> Ctrl+O</span> open · <span className="font-mono">Ctrl+E</span> export · <span className="font-mono">Ctrl+K</span> palette · <span className="font-mono">Del</span> delete.
+          </p>
+        </div>
+      </FieldRow>
 
-      <SettingCard title="Storage">
-        <p className="flex items-center gap-1.5 text-[13px]"><HardDrive className="size-4" aria-hidden /> {usage || "Storage estimate unavailable in this browser."}</p>
-        <button onClick={clearAutosaves} className="flex w-fit items-center gap-1.5 rounded-md border border-red-500/50 px-3 py-1.5 text-[13px] font-semibold text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40">
-          <Trash2 className="size-4" aria-hidden /> Clear local data
-        </button>
-      </SettingCard>
+      <FieldRow title="Storage" desc={usage || "Storage estimate unavailable in this browser."}>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="flex items-center gap-1.5 text-[12.5px]" style={{ color: "var(--muted)" }}>
+            <HardDrive className="size-4" aria-hidden style={{ color: "var(--faint)" }} /> {usage || "—"}
+          </span>
+          <span className="ms-auto">
+            <Btn onClick={clearAutosaves} danger>
+              <Trash2 className="size-4" aria-hidden /> Clear local data
+            </Btn>
+          </span>
+        </div>
+      </FieldRow>
 
-      <SettingCard title="Privacy">
-        <ul className="list-inside list-disc space-y-1 text-[13px] text-slate-600 dark:text-slate-300">
-          <li>Pack, skin, texture, pixel-art, model and JSON/NBT tools run <strong>100% on your device</strong>.</li>
-          <li>Only Profile and Server tools use the network — each is labeled “Requires network” and goes through a minimal proxy with 1–5 min caching.</li>
-          <li>No account, no tracking, no uploads of your files.</li>
+      <FieldRow title="Privacy">
+        <ul className="list-inside list-disc space-y-0.5 text-[13px]" style={{ color: "var(--muted)" }}>
+          <li>Pack, skin, texture, pixel-art, model and JSON/NBT run <strong className="font-semibold" style={{ color: "var(--text)" }}>100% locally</strong>.</li>
+          <li>Only Profile and Server use the network — each is labeled “Requires network”.</li>
+          <li>No account, no tracking, no uploads.</li>
         </ul>
-      </SettingCard>
+      </FieldRow>
     </div>
   );
 }
 
-function SettingCard({ title, children }: { title: string; children: React.ReactNode }) {
+function FieldRow({ title, desc, children }: { title: string; desc?: string; children: React.ReactNode }) {
   return (
-    <section className="rounded-md border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
-      <h2 className="mb-2.5 text-[14px] font-bold">{title}</h2>
-      <div className="flex flex-col gap-2.5">{children}</div>
-    </section>
+    <div className="grid gap-3 px-4 py-4 sm:grid-cols-[180px_1fr]">
+      <div>
+        <h2 className="text-[13px] font-bold">{title}</h2>
+        {desc && <p className="mt-0.5 text-[12px]" style={{ color: "var(--muted)" }}>{desc}</p>}
+      </div>
+      <div>{children}</div>
+    </div>
   );
 }

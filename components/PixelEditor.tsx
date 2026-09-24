@@ -18,6 +18,7 @@ interface Props {
   onEdit?: () => void;
   showGridDefault?: boolean;
   maxZoom?: number;
+  onZoomChange?: (zoom: number) => void;
 }
 
 function clonePixels(ctx: CanvasRenderingContext2D, w: number, h: number): ImageData {
@@ -75,7 +76,7 @@ function hexToRgbaLocal(hex: string): [number, number, number, number] {
 }
 
 export const PixelEditor = React.forwardRef<PixelEditorHandle, Props>(function PixelEditor(
-  { width, height, initialImage, onEdit, showGridDefault = true }: Props,
+  { width, height, initialImage, onEdit, showGridDefault = true, onZoomChange }: Props,
   ref
 ) {
   const dataRef = useRef<HTMLCanvasElement | null>(null);
@@ -87,6 +88,8 @@ export const PixelEditor = React.forwardRef<PixelEditorHandle, Props>(function P
   const [fillShapes, setFillShapes] = useState(false);
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
+
+  useEffect(() => { onZoomChange?.(zoom); }, [zoom, onZoomChange]);
   const history = useRef<ImageData[]>([]);
   const hIndex = useRef(-1);
   const drawing = useRef(false);
@@ -328,9 +331,19 @@ export const PixelEditor = React.forwardRef<PixelEditorHandle, Props>(function P
     { id: "rect", Icon: Square, label: "Rectangle (R)" },
   ];
 
+  const toolBtn = (pressed: boolean): React.CSSProperties => ({
+    background: pressed ? "var(--accent)" : "transparent",
+    color: pressed ? "#fff" : "var(--muted)",
+  });
+
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex flex-wrap items-center gap-1 rounded-md border border-slate-200 bg-white p-1.5 dark:border-slate-700 dark:bg-slate-900">
+      <div
+        className="flex flex-wrap items-center gap-0.5 rounded border p-1"
+        style={{ borderColor: "var(--border)", background: "var(--panel)" }}
+        role="toolbar"
+        aria-label="Pixel tools"
+      >
         {tools.map(({ id, Icon, label }) => (
           <button
             key={id}
@@ -338,19 +351,23 @@ export const PixelEditor = React.forwardRef<PixelEditorHandle, Props>(function P
             title={label}
             aria-label={label}
             aria-pressed={tool === id}
-            className={`rounded p-2 ${tool === id ? "bg-emerald-600 text-white" : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"}`}
+            className="ui-transition rounded p-2"
+            style={toolBtn(tool === id)}
+            onMouseEnter={(e) => { if (tool !== id) (e.currentTarget as HTMLButtonElement).style.background = "var(--panel-2)"; }}
+            onMouseLeave={(e) => { if (tool !== id) (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
           >
             <Icon className="size-4" aria-hidden />
           </button>
         ))}
-        <span className="mx-1 h-5 w-px bg-slate-200 dark:bg-slate-700" />
+        <span className="mx-1 h-5 w-px" style={{ background: "var(--border)" }} aria-hidden />
         <input
           type="color"
           value={color.length === 7 ? color : color.slice(0, 7)}
           onChange={(e) => setColor(e.target.value)}
           aria-label="Color picker"
           title="Color picker"
-          className="h-8 w-9 cursor-pointer rounded border border-slate-200 bg-transparent dark:border-slate-700"
+          className="h-8 w-9 cursor-pointer rounded border bg-transparent"
+          style={{ borderColor: "var(--border)" }}
         />
         <input
           type="text"
@@ -358,21 +375,22 @@ export const PixelEditor = React.forwardRef<PixelEditorHandle, Props>(function P
           onChange={(e) => setColor(e.target.value)}
           aria-label="Hex color"
           spellCheck={false}
-          className="w-20 rounded border border-slate-200 bg-white px-1.5 py-1 font-mono text-[12px] dark:border-slate-700 dark:bg-slate-950"
+          className="w-20 rounded border px-1.5 py-1 font-mono text-[12px]"
+          style={{ borderColor: "var(--border)", background: "var(--panel)" }}
         />
-        <span className="mx-1 h-5 w-px bg-slate-200 dark:bg-slate-700" />
-        <button onClick={undo} disabled={!canUndo} aria-label="Undo (Ctrl+Z)" title="Undo (Ctrl+Z)" className="rounded p-2 text-slate-600 hover:bg-slate-100 disabled:opacity-35 dark:text-slate-300 dark:hover:bg-slate-800">
+        <span className="mx-1 h-5 w-px" style={{ background: "var(--border)" }} aria-hidden />
+        <button onClick={undo} disabled={!canUndo} aria-label="Undo (Ctrl+Z)" title="Undo (Ctrl+Z)" className="ui-transition rounded p-2 disabled:opacity-35" style={{ color: "var(--muted)" }}>
           <Undo2 className="size-4" aria-hidden />
         </button>
-        <button onClick={redo} disabled={!canRedo} aria-label="Redo (Ctrl+Shift+Z)" title="Redo (Ctrl+Shift+Z)" className="rounded p-2 text-slate-600 hover:bg-slate-100 disabled:opacity-35 dark:text-slate-300 dark:hover:bg-slate-800">
+        <button onClick={redo} disabled={!canRedo} aria-label="Redo (Ctrl+Shift+Z)" title="Redo (Ctrl+Shift+Z)" className="ui-transition rounded p-2 disabled:opacity-35" style={{ color: "var(--muted)" }}>
           <Redo2 className="size-4" aria-hidden />
         </button>
-        <span className="mx-1 h-5 w-px bg-slate-200 dark:bg-slate-700" />
-        <button onClick={() => setZoom((z) => Math.max(1, z - 1))} aria-label="Zoom out" title="Zoom out" className="rounded p-2 hover:bg-slate-100 dark:hover:bg-slate-800">
+        <span className="mx-1 h-5 w-px" style={{ background: "var(--border)" }} aria-hidden />
+        <button onClick={() => setZoom((z) => Math.max(1, z - 1))} aria-label="Zoom out" title="Zoom out" className="ui-transition rounded p-2" style={{ color: "var(--muted)" }}>
           <ZoomOut className="size-4" aria-hidden />
         </button>
-        <span className="min-w-12 text-center font-mono text-[12px]" aria-live="polite">{zoom}x</span>
-        <button onClick={() => setZoom((z) => Math.min(32, z + 1))} aria-label="Zoom in" title="Zoom in" className="rounded p-2 hover:bg-slate-100 dark:hover:bg-slate-800">
+        <span className="min-w-12 text-center font-mono text-[12px]" style={{ color: "var(--muted)" }} aria-live="polite">{zoom * 100}%</span>
+        <button onClick={() => setZoom((z) => Math.min(32, z + 1))} aria-label="Zoom in" title="Zoom in" className="ui-transition rounded p-2" style={{ color: "var(--muted)" }}>
           <ZoomIn className="size-4" aria-hidden />
         </button>
         <button
@@ -380,31 +398,32 @@ export const PixelEditor = React.forwardRef<PixelEditorHandle, Props>(function P
           aria-label="Toggle grid"
           aria-pressed={grid}
           title="Toggle grid"
-          className={`rounded p-2 ${grid ? "bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900" : "hover:bg-slate-100 dark:hover:bg-slate-800"}`}
+          className="ui-transition rounded p-2"
+          style={toolBtn(grid)}
         >
           <Grid3x3 className="size-4" aria-hidden />
         </button>
         {(tool === "rect") && (
-          <label className="ms-1 flex items-center gap-1.5 text-[12px] text-slate-600 dark:text-slate-300">
-            <input type="checkbox" checked={fillShapes} onChange={(e) => setFillShapes(e.target.checked)} className="accent-emerald-600" />
+          <label className="ms-1 flex items-center gap-1.5 text-[12px]" style={{ color: "var(--muted)" }}>
+            <input type="checkbox" checked={fillShapes} onChange={(e) => setFillShapes(e.target.checked)} style={{ accentColor: "var(--accent)" }} />
             Fill
           </label>
         )}
       </div>
-      <div className="overflow-auto rounded-md border border-slate-200 bg-slate-100 p-3 dark:border-slate-700 dark:bg-slate-950">
+      <div className="checker overflow-auto rounded border p-3" style={{ borderColor: "var(--border)" }}>
         <canvas
           ref={viewRef}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
           onPointerLeave={onPointerUp}
-          className="mx-auto block max-w-none cursor-crosshair touch-none rounded-sm shadow"
-          style={{ imageRendering: "pixelated" }}
+          className="mx-auto block max-w-none cursor-crosshair touch-none rounded-sm"
+          style={{ imageRendering: "pixelated", boxShadow: "var(--shadow-pop)" }}
           role="application"
           aria-label={`Pixel canvas ${width} by ${height}`}
         />
-        <p className="mt-2 text-center text-[11px] text-slate-500 dark:text-slate-400">
-          {width}×{height} px · pixel-perfect (no smoothing) · transparent pixels preserved
+        <p className="mt-2 text-center font-mono text-[11px]" style={{ color: "var(--faint)" }}>
+          {width}×{height} px · no smoothing · alpha preserved
         </p>
       </div>
     </div>

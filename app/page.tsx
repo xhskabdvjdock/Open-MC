@@ -1,36 +1,37 @@
 "use client";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { Package, PersonStanding, UserSearch, Grid3x3, TerminalSquare, FolderOpen, Trash2, HardDrive } from "lucide-react";
+import { openSavedProject } from "@/lib/projects";
+import {
+  Package, PersonStanding, UserSearch, Grid3x3, TerminalSquare, Server,
+  Plus, Trash2, ArrowRight, FolderOpen, HardDrive,
+} from "lucide-react";
 import { useApp } from "@/components/Providers";
 import { listProjects, deleteProject, type ProjectRecord } from "@/lib/storage";
 import { formatBytes } from "@/lib/pixel-utils";
+import { Btn, SectionLabel, EmptyState } from "@/components/ui";
 
 const QUICK = [
-  { href: "/resource-pack", icon: Package, en: "Resource Pack", ar: "حزمة الموارد" },
-  { href: "/skin", icon: PersonStanding, en: "Skin Studio", ar: "استوديو السكن" },
-  { href: "/profile", icon: UserSearch, en: "Profile Lookup", ar: "بحث الملف" },
-  { href: "/pixel-art", icon: Grid3x3, en: "Pixel Art", ar: "فن البكسل" },
-  { href: "/commands", icon: TerminalSquare, en: "Command Generator", ar: "مولد الأوامر" },
+  { href: "/resource-pack", icon: Package, en: "Resource Pack", ar: "حزمة الموارد", note: "Import, edit, export .zip" },
+  { href: "/skin", icon: PersonStanding, en: "Skin Studio", ar: "استوديو السكن", note: "2D editor + 3D preview" },
+  { href: "/pixel-art", icon: Grid3x3, en: "Pixel Art", ar: "فن البكسل", note: "Canvas + image converter" },
+  { href: "/profile", icon: UserSearch, en: "Profile Lookup", ar: "بحث الملف", note: "Username, UUID, skin" },
+  { href: "/server", icon: Server, en: "Server Status", ar: "حالة السيرفر", note: "Players, version, MOTD" },
+  { href: "/commands", icon: TerminalSquare, en: "Commands", ar: "الأوامر", note: "give, summon, tp…" },
 ];
 
-const ALL = [
-  { href: "/resource-pack", en: "Resource Packs — import, edit, export .zip" },
-  { href: "/skin", en: "Skins — 2D editor + 3D Steve/Alex preview" },
-  { href: "/textures", en: "Textures — resize, crop, palette, filters" },
-  { href: "/model", en: "Models — JSON validation + 3D geometry" },
-  { href: "/server", en: "Servers — status, MOTD, icon" },
-  { href: "/commands", en: "Commands — give/summon/tp/effect…" },
-  { href: "/json", en: "JSON / NBT — formatter, validator, viewer" },
-  { href: "/profile", en: "Profile + UUID tools" },
-  { href: "/validator", en: "Pack validator" },
-  { href: "/optimizer", en: "Pack optimizer" },
-  { href: "/versions", en: "Version + pack formats" },
-  { href: "/pixel-art", en: "Pixel art studio + image converter" },
-];
+const KIND_LABEL: Record<string, string> = {
+  "resource-pack": "Resource Pack",
+  skin: "Skin",
+  "pixel-art": "Pixel Art",
+  model: "Model",
+  other: "File",
+};
 
 export default function Dashboard() {
-  const { t, lang, notify } = useApp();
+  const { t, lang, notify, setNewProjectOpen } = useApp();
+  const router = useRouter();
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
   const [storageNote, setStorageNote] = useState("");
 
@@ -41,86 +42,94 @@ export default function Dashboard() {
     return () => { live = false; };
   }, []);
   useEffect(() => {
+    let live = true;
     (async () => {
       try {
         if (navigator.storage?.estimate) {
           const est = await navigator.storage.estimate();
-          if (est.usage != null) setStorageNote(`${formatBytes(est.usage)} used locally`);
-          else setStorageNote("");
+          if (live && est.usage != null) setStorageNote(`${formatBytes(est.usage)} stored locally`);
         }
-      } catch { setStorageNote(""); }
+      } catch { /* ignore */ }
     })();
+    return () => { live = false; };
   }, []);
 
   return (
-    <div className="flex flex-col gap-5">
-      <section>
-        <h1 className="text-[22px] font-bold tracking-tight">Open MC</h1>
-        <p className="text-[13.5px] text-slate-500 dark:text-slate-400">
-          <span className="font-semibold text-slate-700 dark:text-slate-200">{t.welcome}.</span> {t.welcomeSub}
-        </p>
-      </section>
-
-      <section aria-label={t.quickTools}>
-        <h2 className="mb-2 text-[12px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">{t.quickTools}</h2>
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
-          {QUICK.map(({ href, icon: Icon, en, ar }) => (
-            <Link key={href} href={href} className="group rounded-md border border-slate-200 bg-white p-3 transition-colors hover:border-emerald-500 dark:border-slate-700 dark:bg-slate-900">
-              <Icon className="mb-2 size-5 text-emerald-600 dark:text-emerald-400" aria-hidden />
-              <div className="text-[13.5px] font-semibold">{lang === "ar" ? ar : en}</div>
-              <div className="font-mono text-[11px] text-slate-400">{href}</div>
-            </Link>
-          ))}
+    <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 py-2">
+      <div className="flex flex-wrap items-end gap-3">
+        <div>
+          <h1 className="text-[20px] font-bold tracking-tight">{lang === "ar" ? "مساحة العمل" : "Your workspace"}</h1>
+          <p className="text-[13px]" style={{ color: "var(--muted)" }}>{t.welcomeSub}</p>
         </div>
-      </section>
+        <div className="ms-auto flex gap-1.5">
+          <Btn primary onClick={() => setNewProjectOpen(true)}>
+            <Plus className="size-4" aria-hidden /> {t.newProject}
+          </Btn>
+          <Btn onClick={() => router.push("/projects")}>
+            <FolderOpen className="size-4" aria-hidden /> {t.projects}
+          </Btn>
+        </div>
+      </div>
 
       <section aria-label={t.recentProjects}>
-        <div className="mb-2 flex items-center justify-between">
-          <h2 className="text-[12px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">{t.recentProjects}</h2>
-          {storageNote && (
-            <span className="flex items-center gap-1 text-[11.5px] text-slate-500 dark:text-slate-400">
-              <HardDrive className="size-3.5" aria-hidden /> {storageNote}
-            </span>
-          )}
-        </div>
+        <SectionLabel
+          right={storageNote ? <span className="flex items-center gap-1 font-mono text-[11px] normal-case tracking-normal" style={{ color: "var(--faint)" }}><HardDrive className="size-3.5" aria-hidden />{storageNote}</span> : undefined}
+        >
+          {t.recentProjects}
+        </SectionLabel>
         {projects.length === 0 ? (
-          <div className="flex items-center gap-3 rounded-md border border-dashed border-slate-300 p-4 text-[13px] text-slate-500 dark:border-slate-700 dark:text-slate-400">
-            <FolderOpen className="size-5 shrink-0" aria-hidden />
-            {t.noProjects}
+          <div style={{ border: "1px dashed var(--border-strong)", borderRadius: "var(--radius)" }}>
+            <EmptyState
+              title={lang === "ar" ? "لا مشاريع بعد" : "No projects yet"}
+              body={lang === "ar" ? "أنشئ أول مشروع ماينكرافت." : "Create your first Minecraft project."}
+              action={<Btn primary onClick={() => setNewProjectOpen(true)}><Plus className="size-4" aria-hidden /> {t.newProject}</Btn>}
+            />
           </div>
         ) : (
-          <ul className="grid gap-2 md:grid-cols-2">
-            {projects.slice(0, 6).map((p) => (
-              <li key={p.id} className="flex items-center gap-3 rounded-md border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900">
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-[13.5px] font-semibold">{p.name}</div>
-                  <div className="text-[11.5px] text-slate-500 dark:text-slate-400">
-                    {p.kind} · {new Date(p.updatedAt).toLocaleString()} · {typeof p.data === "string" ? `${p.data.length} chars` : "binary"}
-                  </div>
+          <ul className="divide-y" style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", background: "var(--panel)" }}>
+            {projects.slice(0, 5).map((p) => (
+              <li key={p.id}>
+                <div className="ui-transition flex items-center gap-3 px-3 py-2.5">
+                  <button onClick={() => openSavedProject(p, router, notify)} className="flex min-w-0 flex-1 items-center gap-3 text-start">
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[13.5px] font-semibold">{p.name}</span>
+                      <span className="block text-[11.5px]" style={{ color: "var(--muted)" }}>
+                        {KIND_LABEL[p.kind] ?? p.kind} · {new Date(p.updatedAt).toLocaleString(lang === "ar" ? "ar" : undefined)}
+                      </span>
+                    </span>
+                    <ArrowRight className="size-4 shrink-0 rtl:rotate-180" aria-hidden style={{ color: "var(--faint)" }} />
+                  </button>
+                  <button
+                    onClick={async () => { await deleteProject(p.id); notify(t.del); refresh(); }}
+                    aria-label={`Delete ${p.name}`}
+                    className="ui-transition rounded p-1.5 hover:opacity-70"
+                    style={{ color: "var(--muted)" }}
+                  >
+                    <Trash2 className="size-4" aria-hidden />
+                  </button>
                 </div>
-                <button
-                  onClick={async () => { await deleteProject(p.id); notify(t.del); refresh(); }}
-                  aria-label={`Delete ${p.name}`}
-                  className="rounded p-2 text-slate-500 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950"
-                >
-                  <Trash2 className="size-4" aria-hidden />
-                </button>
               </li>
             ))}
           </ul>
         )}
       </section>
 
-      <section aria-label={t.allTools}>
-        <h2 className="mb-2 text-[12px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">{t.allTools}</h2>
-        <div className="grid gap-2 md:grid-cols-2">
-          {ALL.map((a) => (
-            <Link key={a.href} href={a.href} className="rounded-md border border-slate-200 bg-white px-3 py-2.5 text-[13.5px] hover:border-emerald-500 dark:border-slate-700 dark:bg-slate-900">
-              <span className="font-mono text-[11px] text-emerald-600 dark:text-emerald-400">{a.href}</span>
-              <span className="block text-slate-700 dark:text-slate-200">{a.en}</span>
-            </Link>
+      <section aria-label={t.quickTools}>
+        <SectionLabel>{t.quickTools}</SectionLabel>
+        <ul className="divide-y" style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", background: "var(--panel)" }}>
+          {QUICK.map(({ href, icon: Icon, en, ar, note }) => (
+            <li key={href}>
+              <Link href={href} className="ui-transition flex items-center gap-3 px-3 py-2.5 hover:opacity-80">
+                <Icon className="size-[18px] shrink-0" aria-hidden style={{ color: "var(--accent)" }} />
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[13.5px] font-semibold">{lang === "ar" ? ar : en}</span>
+                  <span className="block truncate text-[11.5px]" style={{ color: "var(--muted)" }}>{note}</span>
+                </span>
+                <span className="shrink-0 font-mono text-[11px]" style={{ color: "var(--faint)" }}>{href}</span>
+              </Link>
+            </li>
           ))}
-        </div>
+        </ul>
       </section>
     </div>
   );

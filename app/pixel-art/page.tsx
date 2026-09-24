@@ -1,29 +1,39 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Grid3x3, Download, ImagePlus } from "lucide-react";
+import { Download, Save } from "lucide-react";
 import { useApp } from "@/components/Providers";
 import { Dropzone } from "@/components/Dropzone";
 import { PixelEditor, type PixelEditorHandle } from "@/components/PixelEditor";
 import { loadImage, downloadBlob, MC_PALETTE, clamp } from "@/lib/pixel-utils";
 import { kvGet, kvSet } from "@/lib/storage";
 import { saveProject, uid } from "@/lib/storage";
+import { Btn, Tabs, StatusBar } from "@/components/ui";
 
 interface CustomPalette { name: string; colors: string[] }
 
 export default function PixelArtPage() {
-  const { notify } = useApp();
+  const { notify, showGrid, setProject } = useApp();
   // Canvas dims + optional overlay image (conversion result). PixelEditor starts
   // blank when overlay is null, so no mount effect is needed for init.
   const [dims, setDims] = useState<[number, number]>([32, 32]);
   const [overlay, setOverlay] = useState<HTMLCanvasElement | null>(null);
   const [editKey, setEditKey] = useState(0);
+  const [dirty, setDirty] = useState(false);
+  const [zoom, setZoom] = useState(8);
+  const [sideTab, setSideTab] = useState<"convert" | "palettes">("convert");
   const ref = useRef<PixelEditorHandle>(null);
 
   const changeSize = useCallback((s: number) => {
     setDims([s, s]);
     setOverlay(null);
     setEditKey((k) => k + 1);
+    setDirty(true);
   }, []);
+
+  useEffect(() => {
+    setProject({ name: `pixel-art-${dims[0]}`, kind: "Pixel Art", dirty });
+  }, [dims, dirty, setProject]);
+  useEffect(() => () => setProject(null), [setProject]);
 
   // converter state
   const [srcImg, setSrcImg] = useState<HTMLImageElement | null>(null);
@@ -122,16 +132,38 @@ export default function PixelArtPage() {
     setOverlay(c);
     setDims([img.naturalWidth, img.naturalHeight]);
     setEditKey((k) => k + 1);
+    setDirty(true);
     notify("Loaded into editor");
   }, [previewUrl, notify]);
+
+  const persist = useCallback(async () => {
+    const blob = await ref.current?.getBlob();
+    if (!blob) { notify("Nothing to save.", "err"); return; }
+    await saveProject({ id: uid("art"), kind: "pixel-art", name: `pixel-art-${dims[0]}`, updatedAt: Date.now(), data: blob });
+    setDirty(false);
+    notify("Saved to projects");
+  }, [notify, dims]);
 
   const exportArt = useCallback(async () => {
     const blob = await ref.current?.getBlob();
     if (!blob) { notify("Nothing to export.", "err"); return; }
     downloadBlob(blob, `pixel-art-${dims[0]}x${dims[1]}.png`);
     await saveProject({ id: uid("art"), kind: "pixel-art", name: `pixel-art-${dims[0]}`, updatedAt: Date.now(), data: blob });
+    setDirty(false);
     notify("Exported");
   }, [notify, dims]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      const typing = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+      if (!(e.ctrlKey || e.metaKey) || typing) return;
+      if (e.key.toLowerCase() === "s") { e.preventDefault(); void persist(); }
+      if (e.key.toLowerCase() === "e") { e.preventDefault(); void exportArt(); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [persist, exportArt]);
 
   const savePalette = useCallback(async () => {
     const c = ref.current?.getCanvas();
@@ -153,98 +185,152 @@ export default function PixelArtPage() {
     notify(`Palette "${name}" saved (${colors.size} colors)`);
   }, [notify, newPalName, palettes]);
 
-  return (
-    <div className="flex flex-col gap-4">
-      <h1 className="flex items-center gap-2 text-[20px] font-bold tracking-tight"><Grid3x3 className="size-5 text-emerald-600" aria-hidden /> Pixel Art Studio</h1>
+  const rangeCls = "w-full";
+  const rangeStyle = { accentColor: "var(--accent)" } as React.CSSProperties;
 
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-[13px] font-semibold">Canvas:</span>
-        {[8, 16, 32, 48, 64].map((s) => (
-          <button key={s} onClick={() => changeSize(s)} aria-pressed={dims[0] === s && dims[1] === s} className={`rounded border px-2.5 py-1 font-mono text-[12.5px] ${dims[0] === s && dims[1] === s ? "border-emerald-600 bg-emerald-600 text-white" : "border-slate-200 hover:border-emerald-500 dark:border-slate-700"}`}>
-            {s}×{s}
-          </button>
-        ))}
-        <button onClick={exportArt} className="ms-auto flex items-center gap-1.5 rounded-md bg-emerald-600 px-3 py-1.5 text-[13px] font-semibold text-white hover:bg-emerald-700">
-          <Download className="size-4" aria-hidden /> Export PNG
-        </button>
+  return (
+    <div className="flex min-h-0 flex-1 flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <div className="flex items-center gap-1" role="group" aria-label="Canvas size">
+          {[8, 16, 32, 48, 64].map((s) => (
+            <button
+              key={s}
+              onClick={() => changeSize(s)}
+              aria-pressed={dims[0] === s && dims[1] === s}
+              className="ui-transition rounded border px-2 py-1 font-mono text-[12px]"
+              style={{
+                borderColor: dims[0] === s && dims[1] === s ? "var(--accent)" : "var(--border)",
+                background: dims[0] === s && dims[1] === s ? "var(--accent)" : "transparent",
+                color: dims[0] === s && dims[1] === s ? "#fff" : "var(--muted)",
+              }}
+            >
+              {s}
+            </button>
+          ))}
+        </div>
+        <span className="font-mono text-[11.5px]" style={{ color: "var(--faint)" }}>{dims[0]}×{dims[1]}</span>
+        <span className="ms-auto flex items-center gap-1.5">
+          <Btn onClick={persist} title="Save to projects (Ctrl+S)">
+            <Save className="size-4" aria-hidden /> Save
+          </Btn>
+          <Btn primary onClick={exportArt} title="Export PNG (Ctrl+E)">
+            <Download className="size-4" aria-hidden /> Export
+          </Btn>
+        </span>
       </div>
 
-      <PixelEditor key={`${dims[0]}x${dims[1]}:${editKey}`} ref={ref} width={dims[0]} height={dims[1]} initialImage={overlay} />
-
-      <section aria-label="Image to pixel art" className="rounded-md border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900">
-        <h2 className="mb-2 flex items-center gap-1.5 text-[14px] font-bold"><ImagePlus className="size-4" aria-hidden /> Image → Pixel Art (local)</h2>
-        <Dropzone accept="image/*" onFiles={onSource} label="Drop a source image" hint="Processed locally — nothing uploaded" compact />
-        <div className="mt-3 grid gap-3 md:grid-cols-2">
-          <div className="flex flex-col gap-2 text-[13px]">
-            <label>Resolution (width px): <span className="font-mono font-bold">{res}</span>
-              <input type="range" min={8} max={128} value={res} onChange={(e) => setRes(+e.target.value)} className="w-full accent-emerald-600" />
-            </label>
-            <label>Color count: <span className="font-mono font-bold">{colorCount}</span>
-              <input type="range" min={2} max={32} value={colorCount} onChange={(e) => setColorCount(+e.target.value)} className="w-full accent-emerald-600" />
-            </label>
-            <label>Palette:
-              <select value={paletteName} onChange={(e) => setPaletteName(e.target.value)} className="ms-2 rounded border border-slate-200 bg-white px-2 py-1 dark:border-slate-700 dark:bg-slate-950">
-                <option value="minecraft">Minecraft-ish (custom set, not official)</option>
-                <option value="grayscale">Grayscale</option>
-                {palettes.map((p) => <option key={p.name} value={p.name}>{p.name} (custom)</option>)}
-              </select>
-            </label>
-            <div className="flex flex-wrap gap-1.5" aria-label="Active palette swatches">
-              {activePalette.slice(0, colorCount).map((c) => (
-                <span key={c} title={c} className="size-5 rounded-sm border border-black/20" style={{ background: c }} />
-              ))}
-            </div>
-            <label className="flex items-center gap-1.5"><input type="checkbox" checked={dither} onChange={(e) => setDither(e.target.checked)} className="accent-emerald-600" /> Floyd–Steinberg dithering</label>
-            <label>Brightness: <span className="font-mono">{bright}</span>
-              <input type="range" min={-80} max={80} value={bright} onChange={(e) => setBright(+e.target.value)} className="w-full accent-emerald-600" />
-            </label>
-            <label>Contrast: <span className="font-mono">{contrast}</span>
-              <input type="range" min={-100} max={100} value={contrast} onChange={(e) => setContrast(+e.target.value)} className="w-full accent-emerald-600" />
-            </label>
-            <div className="flex gap-2">
-              <button onClick={convert} className="rounded-md bg-slate-900 px-3 py-1.5 font-semibold text-white hover:bg-slate-700 dark:bg-slate-100 dark:text-slate-900">Convert</button>
-              {previewUrl && <button onClick={useAsCanvas} className="rounded-md border border-slate-200 px-3 py-1.5 font-semibold hover:border-emerald-500 dark:border-slate-700">Edit result</button>}
-            </div>
+      <div className="flex min-h-[480px] flex-1 flex-col gap-0 lg:flex-row" style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", background: "var(--panel)", overflow: "hidden" }}>
+        {/* canvas dominates */}
+        <div className="min-w-0 flex-1 p-3" style={{ background: "var(--bg)" }}>
+          <PixelEditor
+            key={`${dims[0]}x${dims[1]}:${editKey}`}
+            ref={ref}
+            width={dims[0]}
+            height={dims[1]}
+            initialImage={overlay}
+            showGridDefault={showGrid}
+            onEdit={() => setDirty(true)}
+            onZoomChange={setZoom}
+          />
+        </div>
+        {/* side panel */}
+        <aside className="flex min-h-0 flex-col border-t lg:w-[300px] lg:flex-none lg:border-s lg:border-t-0" style={{ borderColor: "var(--border)", background: "var(--panel)" }} aria-label="Converter and palettes">
+          <div className="px-3 pt-2">
+            <Tabs
+              ariaLabel="Side panel"
+              active={sideTab}
+              onChange={setSideTab}
+              tabs={[
+                { id: "convert", label: "Convert" },
+                { id: "palettes", label: `Palettes${palettes.length ? ` (${palettes.length})` : ""}` },
+              ]}
+            />
           </div>
-          <div>
-            <h3 className="mb-1 text-[13px] font-bold">Result preview</h3>
-            {previewUrl ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={previewUrl} alt="Pixel art conversion preview" className="max-h-72 w-auto rounded border border-slate-200 dark:border-slate-700" style={{ imageRendering: "pixelated" }} />
+          <div className="min-h-0 flex-1 overflow-y-auto p-3">
+            {sideTab === "convert" ? (
+              <div className="flex flex-col gap-2.5 text-[13px]">
+                <Dropzone accept="image/*" onFiles={onSource} label="Drop a source image" hint="Processed locally — nothing uploaded" compact />
+                <label>Resolution: <span className="font-mono font-bold">{res}px</span>
+                  <input type="range" min={8} max={128} value={res} onChange={(e) => setRes(+e.target.value)} className={rangeCls} style={rangeStyle} />
+                </label>
+                <label>Colors: <span className="font-mono font-bold">{colorCount}</span>
+                  <input type="range" min={2} max={32} value={colorCount} onChange={(e) => setColorCount(+e.target.value)} className={rangeCls} style={rangeStyle} />
+                </label>
+                <label>Palette:
+                  <select value={paletteName} onChange={(e) => setPaletteName(e.target.value)} className="mt-1 w-full rounded border px-2 py-1.5" style={{ borderColor: "var(--border)", background: "var(--panel)" }}>
+                    <option value="minecraft">Minecraft-ish (custom, not official)</option>
+                    <option value="grayscale">Grayscale</option>
+                    {palettes.map((p) => <option key={p.name} value={p.name}>{p.name} (custom)</option>)}
+                  </select>
+                </label>
+                <div className="flex flex-wrap gap-1" aria-label="Active palette swatches">
+                  {activePalette.slice(0, colorCount).map((c) => (
+                    <span key={c} title={c} className="size-5 rounded-sm border border-black/20" style={{ background: c }} />
+                  ))}
+                </div>
+                <label className="flex items-center gap-1.5">
+                  <input type="checkbox" checked={dither} onChange={(e) => setDither(e.target.checked)} style={rangeStyle} /> Floyd–Steinberg dithering
+                </label>
+                <label>Brightness: <span className="font-mono">{bright}</span>
+                  <input type="range" min={-80} max={80} value={bright} onChange={(e) => setBright(+e.target.value)} className={rangeCls} style={rangeStyle} />
+                </label>
+                <label>Contrast: <span className="font-mono">{contrast}</span>
+                  <input type="range" min={-100} max={100} value={contrast} onChange={(e) => setContrast(+e.target.value)} className={rangeCls} style={rangeStyle} />
+                </label>
+                <div className="flex gap-1.5">
+                  <Btn primary onClick={convert}>Convert</Btn>
+                  {previewUrl && <Btn onClick={useAsCanvas}>Edit result</Btn>}
+                </div>
+                {previewUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={previewUrl} alt="Pixel art conversion preview" className="w-full rounded border" style={{ borderColor: "var(--border)", imageRendering: "pixelated" }} />
+                ) : (
+                  <p className="text-[12px]" style={{ color: "var(--muted)" }}>Load an image and press Convert — preview appears here before export.</p>
+                )}
+              </div>
             ) : (
-              <p className="text-[12.5px] text-slate-500">No conversion yet. Load an image and press Convert.</p>
+              <div className="flex flex-col gap-2">
+                <div className="flex gap-1.5">
+                  <input value={newPalName} onChange={(e) => setNewPalName(e.target.value)} placeholder="New palette name" aria-label="New palette name" className="min-w-0 flex-1 rounded border px-2 py-1.5 text-[13px]" style={{ borderColor: "var(--border)", background: "var(--panel)" }} />
+                  <Btn onClick={savePalette}>Save</Btn>
+                </div>
+                <p className="text-[11.5px]" style={{ color: "var(--muted)" }}>Save extracts up to 32 colors from the current canvas.</p>
+                <ul className="flex flex-col gap-1.5">
+                  {palettes.map((p) => (
+                    <li key={p.name} className="rounded border px-2 py-1.5" style={{ borderColor: "var(--border)" }}>
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-[12px] font-bold">{p.name}</span>
+                        <button
+                          onClick={async () => {
+                            const next = palettes.filter((x) => x.name !== p.name);
+                            setPalettes(next);
+                            await kvSet("palettes", next);
+                            notify("Palette deleted");
+                          }}
+                          className="ms-auto text-[12px] hover:underline"
+                          style={{ color: "var(--danger)" }}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                      <span className="mt-1 flex flex-wrap gap-1">{p.colors.map((c) => <span key={c} title={c} className="size-4 rounded-sm border border-black/20" style={{ background: c }} />)}</span>
+                    </li>
+                  ))}
+                  {palettes.length === 0 && <li className="text-[12.5px]" style={{ color: "var(--muted)" }}>No custom palettes yet.</li>}
+                </ul>
+              </div>
             )}
           </div>
-        </div>
-      </section>
+        </aside>
+      </div>
 
-      <section aria-label="Palettes" className="rounded-md border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900">
-        <h2 className="mb-2 text-[14px] font-bold">Palettes</h2>
-        <div className="flex flex-wrap items-center gap-2">
-          <input value={newPalName} onChange={(e) => setNewPalName(e.target.value)} placeholder="New palette name" aria-label="New palette name" className="rounded border border-slate-200 px-2 py-1.5 text-[13px] dark:border-slate-700 dark:bg-slate-950" />
-          <button onClick={savePalette} className="rounded-md border border-slate-200 px-3 py-1.5 text-[13px] font-semibold hover:border-emerald-500 dark:border-slate-700">Extract from canvas + save</button>
-        </div>
-        <ul className="mt-2 flex flex-col gap-1.5">
-          {palettes.map((p) => (
-            <li key={p.name} className="flex items-center gap-2 text-[13px]">
-              <span className="font-mono font-bold">{p.name}</span>
-              <span className="flex gap-1">{p.colors.map((c) => <span key={c} title={c} className="size-4 rounded-sm border border-black/20" style={{ background: c }} />)}</span>
-              <button
-                onClick={async () => {
-                  const next = palettes.filter((x) => x.name !== p.name);
-                  setPalettes(next);
-                  await kvSet("palettes", next);
-                  notify("Palette deleted");
-                }}
-                className="ms-auto text-[12px] text-red-600 hover:underline"
-              >
-                Delete
-              </button>
-            </li>
-          ))}
-          {palettes.length === 0 && <li className="text-[12.5px] text-slate-500">No custom palettes yet.</li>}
-        </ul>
-      </section>
+      <StatusBar
+        items={[
+          <span key="n">pixel-art-{dims[0]}.png</span>,
+          dirty ? <span key="s" style={{ color: "var(--warn)" }}>● Unsaved</span> : <span key="s">Saved locally</span>,
+          <span key="d">{dims[0]}×{dims[1]} · {zoom * 100}%</span>,
+        ]}
+      />
     </div>
   );
 }

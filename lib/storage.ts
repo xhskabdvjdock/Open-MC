@@ -55,6 +55,20 @@ export async function saveProject(p: ProjectRecord): Promise<void> {
   });
 }
 
+export async function getProject(id: string): Promise<ProjectRecord | null> {
+  try {
+    const db = await openDb();
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction("projects", "readonly");
+      const req = tx.objectStore("projects").get(id);
+      req.onsuccess = () => resolve((req.result as ProjectRecord) ?? null);
+      req.onerror = () => reject(req.error);
+    });
+  } catch {
+    return null;
+  }
+}
+
 export async function deleteProject(id: string): Promise<void> {
   const db = await openDb();
   await new Promise<void>((resolve, reject) => {

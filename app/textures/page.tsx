@@ -1,19 +1,37 @@
 "use client";
-import { useCallback, useState } from "react";
-import { Image as ImageIcon, Download, RotateCw, FlipHorizontal2, FlipVertical2 } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { Download, RotateCw, FlipHorizontal2, FlipVertical2, Save } from "lucide-react";
 import { useApp } from "@/components/Providers";
 import { Dropzone } from "@/components/Dropzone";
 import { loadImage, downloadBlob, clamp } from "@/lib/pixel-utils";
 import { saveProject, uid } from "@/lib/storage";
+import { Btn, inputCls, inputStyle } from "@/components/ui";
+
+function ToolBox({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="rounded border p-2.5" style={{ borderColor: "var(--border)", background: "var(--panel)" }}>
+      <h3 className="mb-1.5 text-[11px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--faint)" }}>{title}</h3>
+      <div className="flex flex-col gap-2">{children}</div>
+    </section>
+  );
+}
+
+function OpButton({ children, onClick }: { children: React.ReactNode; onClick: () => void }) {
+  return (
+    <button onClick={onClick} className="ui-transition flex w-fit items-center gap-1.5 rounded border px-2.5 py-1 text-[12.5px] font-semibold" style={{ borderColor: "var(--border)" }}>
+      {children}
+    </button>
+  );
+}
 
 export default function TexturesPage() {
-  const { notify } = useApp();
+  const { notify, setProject } = useApp();
   const [canvas, setCanvas] = useState<HTMLCanvasElement | null>(null);
   const [name, setName] = useState("texture");
+  const [dirty, setDirty] = useState(false);
   const [, setTick] = useState(0);
   const rerender = () => setTick((t) => t + 1);
 
-  // op params
   const [rw, setRw] = useState(16);
   const [rh, setRh] = useState(16);
   const [nearest, setNearest] = useState(true);
@@ -24,6 +42,11 @@ export default function TexturesPage() {
   const [bright, setBright] = useState(0);
   const [contrast, setContrast] = useState(0);
   const [pixelSize, setPixelSize] = useState(4);
+
+  useEffect(() => {
+    setProject(canvas ? { name: `${name}.png`, kind: "Texture", dirty } : null);
+  }, [canvas, name, dirty, setProject]);
+  useEffect(() => () => setProject(null), [setProject]);
 
   const onFiles = useCallback(async (uploads: File[]) => {
     const f = uploads[0];
@@ -39,17 +62,21 @@ export default function TexturesPage() {
       setName(f.name.replace(/\.[a-z]+$/i, ""));
       setRw(c.width); setRh(c.height);
       setCrop({ x: 0, y: 0, w: c.width, h: c.height });
+      setDirty(true);
       notify("Image loaded");
     } catch { notify("Could not decode image.", "err"); }
   }, [notify]);
+
+  const markDirty = useCallback(() => setDirty(true), []);
 
   const mutate = useCallback((fn: (ctx: CanvasRenderingContext2D, c: HTMLCanvasElement) => HTMLCanvasElement | void, label: string) => {
     if (!canvas) { notify("Load an image first.", "err"); return; }
     const out = fn(canvas.getContext("2d", { willReadFrequently: true })!, canvas);
     if (out && out !== canvas) setCanvas(out);
     else { setCanvas(canvas); rerender(); }
+    markDirty();
     notify(label);
-  }, [canvas, notify]);
+  }, [canvas, notify, markDirty]);
 
   const doResize = () => mutate((_, c) => {
     const out = document.createElement("canvas");
@@ -153,7 +180,6 @@ export default function TexturesPage() {
     let total = 0;
     for (let i = 0; i < d.length; i += 16) {
       if (d[i + 3] < 128) continue;
-      // quantize to 4-bit per channel for grouping
       const key = [d[i] >> 4, d[i + 1] >> 4, d[i + 2] >> 4].join(",");
       counts.set(key, (counts.get(key) ?? 0) + 1);
       total++;
@@ -172,96 +198,145 @@ export default function TexturesPage() {
     if (!blob) { notify("Export failed", "err"); return; }
     downloadBlob(blob, `${name || "texture"}.png`);
     await saveProject({ id: uid("tex"), kind: "other", name, updatedAt: Date.now(), data: blob });
+    setDirty(false);
     notify("Exported");
   };
+
+  const save = async () => {
+    if (!canvas) { notify("Nothing to save.", "err"); return; }
+    const blob = await new Promise<Blob | null>((res) => canvas.toBlob((b) => res(b), "image/png"));
+    if (!blob) return;
+    await saveProject({ id: uid("tex"), kind: "other", name, updatedAt: Date.now(), data: blob });
+    setDirty(false);
+    notify("Saved to projects");
+  };
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      const typing = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+      if (typing) return;
+      if (!(e.ctrlKey || e.metaKey)) return;
+      if (e.key.toLowerCase() === "s") { e.preventDefault(); void save(); }
+      if (e.key.toLowerCase() === "e") { e.preventDefault(); void exportPng(); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
 
   const url = canvas?.toDataURL("image/png");
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex min-h-0 flex-1 flex-col gap-2">
       <div className="flex flex-wrap items-center gap-2">
-        <h1 className="flex items-center gap-2 text-[20px] font-bold tracking-tight"><ImageIcon className="size-5 text-emerald-600" aria-hidden /> Texture Tools</h1>
+        <input
+          value={name}
+          onChange={(e) => { setName(e.target.value); setDirty(true); }}
+          aria-label="File name"
+          spellCheck={false}
+          className="w-40 rounded border border-transparent bg-transparent px-2 py-1 text-[14px] font-bold outline-none"
+          onFocus={(e) => ((e.target as HTMLInputElement).style.borderColor = "var(--border)")}
+          onBlur={(e) => ((e.target as HTMLInputElement).style.borderColor = "transparent")}
+        />
+        <span className="flex items-center gap-1.5 font-mono text-[11.5px]" style={{ color: "var(--muted)" }} role="status">
+          <span className="inline-block size-2 rounded-full" style={{ background: dirty ? "var(--warn)" : "var(--accent)" }} />
+          {dirty ? "Unsaved changes" : canvas ? "Ready" : "Empty"}
+        </span>
         <span className="ms-auto flex items-center gap-1.5">
-          <input value={name} onChange={(e) => setName(e.target.value)} aria-label="File name" className="w-40 rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[13px] dark:border-slate-700 dark:bg-slate-900" />
-          <button onClick={exportPng} className="flex items-center gap-1.5 rounded-md bg-emerald-600 px-3 py-1.5 text-[13px] font-semibold text-white hover:bg-emerald-700">
+          <Btn onClick={save} title="Save to projects (Ctrl+S)">
+            <Save className="size-4" aria-hidden /> Save
+          </Btn>
+          <Btn primary onClick={exportPng} title="Export PNG (Ctrl+E)">
             <Download className="size-4" aria-hidden /> Export PNG
-          </button>
+          </Btn>
         </span>
       </div>
-      <Dropzone accept="image/*" onFiles={onFiles} label="Drop an image to edit" hint="All processing is local · pixel operations use nearest-neighbor by default" compact />
-      <div className="grid gap-4 lg:grid-cols-[1fr_320px]">
-        <div className="rounded-md border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900">
-          <h2 className="mb-2 text-[13px] font-bold">Preview ({canvas ? `${canvas.width}×${canvas.height}` : "empty"})</h2>
+
+      <Dropzone accept="image/*" onFiles={onFiles} label="Drop an image to edit" hint="All processing is local · nearest-neighbor by default" compact />
+
+      <div className="grid gap-3 lg:grid-cols-[1fr_300px]">
+        <div className="rounded border p-3" style={{ borderColor: "var(--border)", background: "var(--panel)" }}>
+          <h2 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--faint)" }}>
+            Preview {canvas ? `${canvas.width}×${canvas.height}` : ""}
+          </h2>
           {url && canvas ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={url} alt="Texture being edited" className="max-h-[480px] w-auto max-w-full rounded border border-slate-200 bg-[repeating-conic-gradient(#ddd_0_25%,#fff_0_50%)] bg-[length:16px_16px] dark:border-slate-700" style={{ imageRendering: "pixelated" }} />
+            <img src={url} alt="Texture being edited" className="max-h-[520px] w-auto max-w-full rounded-sm border" style={{ imageRendering: "pixelated", borderColor: "var(--border)" }} />
           ) : (
-            <p className="text-[13px] text-slate-500">Load an image to begin.</p>
+            <p className="py-10 text-center text-[13px]" style={{ color: "var(--muted)" }}>Drop an image above to begin.</p>
           )}
         </div>
-        <div className="flex flex-col gap-3 text-[13px]">
+
+        <div className="flex flex-col gap-2.5 text-[13px]" style={{ maxHeight: "min(78vh, 980px)", overflowY: "auto" }}>
           <ToolBox title="Resize">
             <div className="flex items-center gap-2">
-              <label>W <input type="number" value={rw} onChange={(e) => setRw(+e.target.value)} className="w-20 rounded border border-slate-200 px-1.5 py-1 dark:border-slate-700 dark:bg-slate-950" /></label>
-              <label>H <input type="number" value={rh} onChange={(e) => setRh(+e.target.value)} className="w-20 rounded border border-slate-200 px-1.5 py-1 dark:border-slate-700 dark:bg-slate-950" /></label>
+              <label className="flex flex-col text-[12px]">W<input type="number" value={rw} onChange={(e) => setRw(+e.target.value)} className={inputCls} style={inputStyle()} /></label>
+              <label className="flex flex-col text-[12px]">H<input type="number" value={rh} onChange={(e) => setRh(+e.target.value)} className={inputCls} style={inputStyle()} /></label>
             </div>
-            <label className="flex items-center gap-1.5"><input type="checkbox" checked={nearest} onChange={(e) => setNearest(e.target.checked)} className="accent-emerald-600" /> Nearest-neighbor (pixel-perfect)</label>
+            <label className="flex items-center gap-1.5 text-[12.5px]"><input type="checkbox" checked={nearest} onChange={(e) => setNearest(e.target.checked)} style={{ accentColor: "var(--accent)" }} /> Nearest-neighbor</label>
             <OpButton onClick={doResize}>Apply resize</OpButton>
           </ToolBox>
+
           <ToolBox title="Crop">
             <div className="grid grid-cols-4 gap-1.5">
               {(["x", "y", "w", "h"] as const).map((k) => (
-                <label key={k} className="flex flex-col">{k}
-                  <input type="number" value={crop[k]} onChange={(e) => setCrop({ ...crop, [k]: +e.target.value })} className="rounded border border-slate-200 px-1.5 py-1 dark:border-slate-700 dark:bg-slate-950" />
+                <label key={k} className="flex flex-col text-[12px]">{k}
+                  <input type="number" value={crop[k]} onChange={(e) => setCrop({ ...crop, [k]: +e.target.value })} className={inputCls} style={inputStyle()} />
                 </label>
               ))}
             </div>
             <OpButton onClick={doCrop}>Apply crop</OpButton>
           </ToolBox>
+
           <ToolBox title="Rotate / Flip">
             <div className="flex flex-wrap gap-1.5">
               <OpButton onClick={() => doRotate(90)}><RotateCw className="size-3.5" aria-hidden /> 90°</OpButton>
               <OpButton onClick={() => doRotate(180)}>180°</OpButton>
               <OpButton onClick={() => doRotate(270)}>270°</OpButton>
-              <OpButton onClick={() => doFlip(true)}><FlipHorizontal2 className="size-3.5" aria-hidden /> Flip H</OpButton>
-              <OpButton onClick={() => doFlip(false)}><FlipVertical2 className="size-3.5" aria-hidden /> Flip V</OpButton>
+              <OpButton onClick={() => doFlip(true)}><FlipHorizontal2 className="size-3.5" aria-hidden /> H</OpButton>
+              <OpButton onClick={() => doFlip(false)}><FlipVertical2 className="size-3.5" aria-hidden /> V</OpButton>
             </div>
           </ToolBox>
+
           <ToolBox title="Pixelate">
             <label>Block size: <span className="font-mono font-bold">{pixelSize}</span>
-              <input type="range" min={2} max={16} value={pixelSize} onChange={(e) => setPixelSize(+e.target.value)} className="w-full accent-emerald-600" />
+              <input type="range" min={2} max={16} value={pixelSize} onChange={(e) => setPixelSize(+e.target.value)} className="w-full" style={{ accentColor: "var(--accent)" }} />
             </label>
-            <OpButton onClick={doPixelate}>Apply pixelate</OpButton>
+            <OpButton onClick={doPixelate}>Apply</OpButton>
           </ToolBox>
+
           <ToolBox title="Color replace">
             <div className="flex items-center gap-2">
-              <label className="flex items-center gap-1">From <input type="color" value={fromColor} onChange={(e) => setFromColor(e.target.value)} /></label>
-              <label className="flex items-center gap-1">To <input type="color" value={toColor} onChange={(e) => setToColor(e.target.value)} /></label>
+              <label className="flex items-center gap-1 text-[12px]">From <input type="color" value={fromColor} onChange={(e) => setFromColor(e.target.value)} /></label>
+              <label className="flex items-center gap-1 text-[12px]">To <input type="color" value={toColor} onChange={(e) => setToColor(e.target.value)} /></label>
             </div>
-            <label>Tolerance: <span className="font-mono">{tolerance}</span>
-              <input type="range" min={0} max={200} value={tolerance} onChange={(e) => setTolerance(+e.target.value)} className="w-full accent-emerald-600" />
+            <label className="text-[12.5px]">Tolerance: <span className="font-mono">{tolerance}</span>
+              <input type="range" min={0} max={200} value={tolerance} onChange={(e) => setTolerance(+e.target.value)} className="w-full" style={{ accentColor: "var(--accent)" }} />
             </label>
-            <OpButton onClick={doColorReplace}>Apply replace</OpButton>
+            <OpButton onClick={doColorReplace}>Apply</OpButton>
           </ToolBox>
+
           <ToolBox title="Brightness / Contrast">
-            <label>Brightness: <span className="font-mono">{bright}</span>
-              <input type="range" min={-100} max={100} value={bright} onChange={(e) => setBright(+e.target.value)} className="w-full accent-emerald-600" />
+            <label className="text-[12.5px]">Brightness: <span className="font-mono">{bright}</span>
+              <input type="range" min={-100} max={100} value={bright} onChange={(e) => setBright(+e.target.value)} className="w-full" style={{ accentColor: "var(--accent)" }} />
             </label>
-            <label>Contrast: <span className="font-mono">{contrast}</span>
-              <input type="range" min={-100} max={100} value={contrast} onChange={(e) => setContrast(+e.target.value)} className="w-full accent-emerald-600" />
+            <label className="text-[12.5px]">Contrast: <span className="font-mono">{contrast}</span>
+              <input type="range" min={-100} max={100} value={contrast} onChange={(e) => setContrast(+e.target.value)} className="w-full" style={{ accentColor: "var(--accent)" }} />
             </label>
             <OpButton onClick={doBrightContrast}>Apply</OpButton>
           </ToolBox>
+
           <ToolBox title="Transparency">
             <div className="flex gap-1.5">
               <OpButton onClick={() => doTransparency("white")}>White → transparent</OpButton>
               <OpButton onClick={() => doTransparency("black")}>Black → transparent</OpButton>
             </div>
           </ToolBox>
+
           <ToolBox title="Palette extractor">
             <OpButton onClick={extractPalette}>Extract top colors</OpButton>
             {palette.length > 0 && (
-              <ul className="mt-1.5 flex flex-col gap-1">
+              <ul className="mt-1 flex flex-col gap-1">
                 {palette.map((p) => (
                   <li key={p.hex} className="flex items-center gap-2 font-mono text-[12px]">
                     <span className="size-4 rounded-sm border border-black/20" style={{ background: p.hex }} />
@@ -274,22 +349,5 @@ export default function TexturesPage() {
         </div>
       </div>
     </div>
-  );
-}
-
-function ToolBox({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <section className="rounded-md border border-slate-200 bg-white p-2.5 dark:border-slate-700 dark:bg-slate-900">
-      <h3 className="mb-1.5 text-[12px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">{title}</h3>
-      <div className="flex flex-col gap-2">{children}</div>
-    </section>
-  );
-}
-
-function OpButton({ children, onClick }: { children: React.ReactNode; onClick: () => void }) {
-  return (
-    <button onClick={onClick} className="flex w-fit items-center gap-1.5 rounded-md border border-slate-200 px-2.5 py-1 text-[12.5px] font-semibold hover:border-emerald-500 dark:border-slate-700">
-      {children}
-    </button>
   );
 }

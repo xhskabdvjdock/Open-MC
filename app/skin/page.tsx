@@ -1,38 +1,49 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { PersonStanding, Download, Upload, Eraser } from "lucide-react";
+import { Download, Upload, Eraser, Save } from "lucide-react";
 import { useApp } from "@/components/Providers";
-import { Dropzone } from "@/components/Dropzone";
 import { PixelEditor, type PixelEditorHandle } from "@/components/PixelEditor";
 import { Skin3D } from "@/components/Skin3D";
+import { Btn, Tabs, SectionLabel, StatusBar } from "@/components/ui";
 import { loadImage, isValidSkinSize, downloadBlob } from "@/lib/pixel-utils";
-import { saveProject, uid, kvGet } from "@/lib/storage";
+import { saveProject, getProject, uid, kvGet } from "@/lib/storage";
+import { consumeNewProject } from "@/components/NewProjectDialog";
+import { consumeOpenProject } from "@/lib/projects";
 
 function blankCanvas(w: number, h: number): HTMLCanvasElement {
   const c = document.createElement("canvas");
   c.width = w; c.height = h;
-  const ctx = c.getContext("2d")!;
-  ctx.clearRect(0, 0, w, h);
+  c.getContext("2d")!.clearRect(0, 0, w, h);
   return c;
 }
 
-// Procedural CC0 mannequin template (not Mojang's Steve/Alex art): simple two-tone body guide.
 function mannequinCanvas(): HTMLCanvasElement {
   const c = blankCanvas(64, 64);
   const ctx = c.getContext("2d")!;
   const skin = "#c98e5f", shirt = "#2f9e6e", pants = "#3b5bdb";
   const rect = (x: number, y: number, w: number, h: number, col: string) => { ctx.fillStyle = col; ctx.fillRect(x, y, w, h); };
-  rect(8, 8, 8, 8, skin);            // head front
-  rect(20, 20, 8, 12, shirt);        // body front
-  rect(44, 20, 4, 12, skin);         // right arm
-  rect(36, 52, 4, 12, skin);         // left arm
-  rect(4, 20, 4, 12, pants);         // right leg
-  rect(20, 52, 4, 12, pants);        // left leg
+  rect(8, 8, 8, 8, skin);
+  rect(20, 20, 8, 12, shirt);
+  rect(44, 20, 4, 12, skin);
+  rect(36, 52, 4, 12, skin);
+  rect(4, 20, 4, 12, pants);
+  rect(20, 52, 4, 12, pants);
   return c;
 }
 
+const PARTS: { id: string; label: string; region: [number, number, number, number] }[] = [
+  { id: "head", label: "Head", region: [8, 8, 8, 8] },
+  { id: "head-o", label: "Head · outer", region: [40, 8, 8, 8] },
+  { id: "body", label: "Body", region: [20, 20, 8, 12] },
+  { id: "body-o", label: "Body · outer", region: [20, 36, 8, 12] },
+  { id: "arm-r", label: "Right arm", region: [44, 20, 4, 12] },
+  { id: "arm-l", label: "Left arm", region: [36, 52, 4, 12] },
+  { id: "leg-r", label: "Right leg", region: [4, 20, 4, 12] },
+  { id: "leg-l", label: "Left leg", region: [20, 52, 4, 12] },
+];
+
 export default function SkinPage() {
-  const { notify, autosave } = useApp();
+  const { notify, autosave, showGrid, setProject } = useApp();
   const [base, setBase] = useState<HTMLCanvasElement | null>(null);
   const [editKey, setEditKey] = useState(0);
   const [slim, setSlim] = useState(false);
@@ -40,31 +51,68 @@ export default function SkinPage() {
   const [skinUrl, setSkinUrl] = useState("");
   const [skinName, setSkinName] = useState("my-skin");
   const [dirty, setDirty] = useState(false);
+  const [view, setView] = useState<"preview" | "layout">("preview");
   const ref = useRef<PixelEditorHandle>(null);
 
   useEffect(() => {
     let live = true;
-    kvGet<string | null>("autosave-skin", null).then(async (saved) => {
+    (async () => {
+      const seedName = consumeNewProject("skin");
+      if (seedName && live) {
+        setSkinName(seedName);
+        setBase(blankCanvas(64, 64));
+        setDirty(true);
+        return;
+      }
+      const openId = consumeOpenProject("skin");
+      if (openId && live) {
+        const rec = await getProject(openId);
+        if (rec && typeof rec.data === "object" && live) {
+          try {
+            const img = await loadImage(rec.data as Blob);
+            if (isValidSkinSize(img.naturalWidth, img.naturalHeight)) {
+              const c = blankCanvas(64, 64);
+              c.getContext("2d")!.drawImage(img, 0, 0);
+              setBase(c);
+              setSkinName(rec.name);
+              setEditKey((k) => k + 1);
+              notify(`Opened "${rec.name}"`);
+              return;
+            }
+          } catch { /* fall through */ }
+        }
+      }
+      if (!live) return;
+      const saved = await kvGet<string | null>("autosave-skin", null);
       if (!live) return;
       if (saved) {
         try {
           const img = await loadImage(saved);
-          if (!live) return;
           if (img.naturalWidth === 64 && (img.naturalHeight === 64 || img.naturalHeight === 32)) {
             const c = blankCanvas(64, 64);
             c.getContext("2d")!.drawImage(img, 0, 0);
             setBase(c);
             return;
           }
-        } catch { /* fall through to blank */ }
+        } catch { /* fall through */ }
       }
       if (live) setBase(blankCanvas(64, 64));
-    });
+    })();
     return () => { live = false; };
+  }, [notify]);
+
+  useEffect(() => {
+    setProject({ name: skinName, kind: "Skin", dirty });
+  }, [skinName, dirty, setProject]);
+  useEffect(() => () => setProject(null), [setProject]);
+
+  const onEdit = useCallback(() => {
+    setDirty(true);
+    const c = ref.current?.getCanvas();
+    if (c) setSkinUrl(c.toDataURL("image/png"));
   }, []);
 
   useEffect(() => {
-    // initial preview once base is set
     if (base) {
       const t = setTimeout(() => {
         const c = ref.current?.getCanvas();
@@ -74,20 +122,14 @@ export default function SkinPage() {
     }
   }, [base, editKey]);
 
-  const onEdit = useCallback(() => {
-    setDirty(true);
-    // debounce preview so 3D stays live but cheap
-    const c = ref.current?.getCanvas();
-    if (c) setSkinUrl(c.toDataURL("image/png"));
-  }, []);
-
   useEffect(() => {
     if (!autosave || !dirty) return;
     const id = setTimeout(async () => {
       const c = ref.current?.getCanvas();
       if (c) {
         try {
-          await kvSetSafe("autosave-skin", c.toDataURL("image/png"));
+          const { kvSet } = await import("@/lib/storage");
+          await kvSet("autosave-skin", c.toDataURL("image/png"));
           setDirty(false);
         } catch { /* ignore */ }
       }
@@ -95,11 +137,9 @@ export default function SkinPage() {
     return () => clearTimeout(id);
   }, [autosave, dirty, skinUrl]);
 
-  const importSkin = useCallback(async (uploads: File[]) => {
-    const f = uploads[0];
-    if (!f) return;
+  const importBytes = useCallback(async (blob: Blob, name: string) => {
     try {
-      const img = await loadImage(f);
+      const img = await loadImage(blob);
       if (!isValidSkinSize(img.naturalWidth, img.naturalHeight)) {
         notify(`Invalid skin size ${img.naturalWidth}×${img.naturalHeight}. Use 64×64 or 64×32.`, "err");
         return;
@@ -108,16 +148,29 @@ export default function SkinPage() {
       const ctx = c.getContext("2d")!;
       ctx.imageSmoothingEnabled = false;
       ctx.drawImage(img, 0, 0);
-      // 64x32 legacy → copy right limbs to left slots is handled by renderer fallback; keep as-is
       setBase(c);
       setEditKey((k) => k + 1);
-      setSkinName(f.name.replace(/\.(png|jpg|jpeg)$/i, ""));
+      setSkinName(name);
       setDirty(true);
       notify("Skin imported");
     } catch {
       notify("Could not decode image.", "err");
     }
   }, [notify]);
+
+  const importSkin = useCallback(async (uploads: File[]) => {
+    const f = uploads[0];
+    if (!f) return;
+    await importBytes(f, f.name.replace(/\.(png|jpg|jpeg)$/i, ""));
+  }, [importBytes]);
+
+  const persist = useCallback(async () => {
+    const blob = await ref.current?.getBlob();
+    if (!blob) { notify("Nothing to save.", "err"); return; }
+    await saveProject({ id: uid("skin"), kind: "skin", name: skinName, updatedAt: Date.now(), data: blob, meta: { slim } });
+    setDirty(false);
+    notify("Saved to projects");
+  }, [notify, skinName, slim]);
 
   const exportSkin = useCallback(async () => {
     const blob = await ref.current?.getBlob();
@@ -132,7 +185,6 @@ export default function SkinPage() {
     const c = ref.current?.getCanvas();
     if (!c) return;
     const ctx = c.getContext("2d", { willReadFrequently: true })!;
-    // overlay regions on 64x64
     const regions: [number, number, number, number][] = [
       [32, 0, 32, 16], [16, 32, 32, 16], [40, 32, 16, 16],
       [0, 32, 16, 16], [0, 48, 16, 16], [48, 48, 16, 16],
@@ -150,67 +202,185 @@ export default function SkinPage() {
     notify("Outer layer cleared");
   }, [notify, onEdit]);
 
+  // shortcuts: Ctrl+S persist · Ctrl+E export
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      const typing = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+      if (!(e.ctrlKey || e.metaKey) || typing) return;
+      if (e.key.toLowerCase() === "s") { e.preventDefault(); void persist(); }
+      if (e.key.toLowerCase() === "e") { e.preventDefault(); void exportSkin(); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [persist, exportSkin]);
+
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex min-h-0 flex-1 flex-col gap-2">
       <div className="flex flex-wrap items-center gap-2">
-        <h1 className="flex items-center gap-2 text-[20px] font-bold tracking-tight"><PersonStanding className="size-5 text-emerald-600" aria-hidden /> Skin Studio</h1>
-        <span className="text-[12px] text-slate-500">{dirty ? "unsaved changes" : "saved locally"}</span>
+        <input
+          value={skinName}
+          onChange={(e) => { setSkinName(e.target.value); setDirty(true); }}
+          aria-label="Skin name"
+          spellCheck={false}
+          className="w-44 rounded border border-transparent bg-transparent px-2 py-1 text-[14px] font-bold outline-none"
+          onFocus={(e) => ((e.target as HTMLInputElement).style.borderColor = "var(--border)")}
+          onBlur={(e) => ((e.target as HTMLInputElement).style.borderColor = "transparent")}
+        />
+        <span className="flex items-center gap-1.5 font-mono text-[11.5px]" style={{ color: "var(--muted)" }} role="status">
+          <span className="inline-block size-2 rounded-full" style={{ background: dirty ? "var(--warn)" : "var(--accent)" }} />
+          {dirty ? "Unsaved changes" : "Saved locally"}
+        </span>
         <span className="ms-auto flex items-center gap-1.5">
-          <input value={skinName} onChange={(e) => setSkinName(e.target.value)} aria-label="Skin name" className="w-40 rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[13px] dark:border-slate-700 dark:bg-slate-900" />
-          <button onClick={exportSkin} className="flex items-center gap-1.5 rounded-md bg-emerald-600 px-3 py-1.5 text-[13px] font-semibold text-white hover:bg-emerald-700">
+          <Btn onClick={persist} title="Save to projects (Ctrl+S)">
+            <Save className="size-4" aria-hidden /> Save
+          </Btn>
+          <Btn primary onClick={exportSkin} title="Export PNG (Ctrl+E)">
             <Download className="size-4" aria-hidden /> Export PNG
-          </button>
+          </Btn>
         </span>
       </div>
 
-      <div className="grid gap-2 sm:grid-cols-3">
-        <button onClick={() => { setBase(blankCanvas(64, 64)); setEditKey((k) => k + 1); }} className="rounded-md border border-slate-200 bg-white px-3 py-2 text-[13px] font-semibold hover:border-emerald-500 dark:border-slate-700 dark:bg-slate-900">Blank 64×64</button>
-        <button onClick={() => { setBase(mannequinCanvas()); setEditKey((k) => k + 1); setDirty(true); }} className="rounded-md border border-slate-200 bg-white px-3 py-2 text-[13px] font-semibold hover:border-emerald-500 dark:border-slate-700 dark:bg-slate-900">Mannequin guide (CC0)</button>
-        <label className="flex cursor-pointer items-center justify-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-2 text-[13px] font-semibold hover:border-emerald-500 dark:border-slate-700 dark:bg-slate-900">
-          <Upload className="size-4" aria-hidden /> Import skin…
-          <input type="file" accept="image/png,image/jpeg" className="hidden" onChange={async (e) => { if (e.target.files) await importSkin([...e.target.files]); e.target.value = ""; }} />
-        </label>
-      </div>
-      <Dropzone accept="image/png,image/jpeg" onFiles={importSkin} label="Or drop a skin PNG here" hint="64×64 or legacy 64×32 · never stretched · validated on import" compact />
+      <div className="flex min-h-[520px] flex-1 flex-col gap-0 lg:flex-row" style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", background: "var(--panel)", overflow: "hidden" }}>
+        {/* tools rail */}
+        <div className="flex shrink-0 flex-row gap-4 overflow-x-auto border-b p-3 lg:w-52 lg:flex-col lg:gap-3 lg:overflow-visible lg:border-b-0 lg:border-e" style={{ borderColor: "var(--border)" }}>
+          <div className="min-w-36">
+            <SectionLabel>Canvas</SectionLabel>
+            <div className="flex flex-col gap-1">
+              <RailBtn onClick={() => { setBase(blankCanvas(64, 64)); setEditKey((k) => k + 1); setDirty(true); }}>Blank 64×64</RailBtn>
+              <RailBtn onClick={() => { setBase(mannequinCanvas()); setEditKey((k) => k + 1); setDirty(true); }}>Mannequin guide</RailBtn>
+              <label className="ui-transition flex cursor-pointer items-center gap-1.5 rounded border px-2 py-[7px] text-[12.5px] font-semibold" style={{ borderColor: "var(--border)" }}>
+                <Upload className="size-3.5" aria-hidden style={{ color: "var(--muted)" }} /> Import…
+                <input type="file" accept="image/png,image/jpeg" className="hidden" onChange={async (e) => { if (e.target.files) await importSkin([...e.target.files]); e.target.value = ""; }} />
+              </label>
+            </div>
+          </div>
+          <div className="min-w-36">
+            <SectionLabel>Model</SectionLabel>
+            <div className="flex flex-col gap-1 text-[12.5px]">
+              <label className="flex cursor-pointer items-center gap-1.5 rounded px-1 py-1">
+                <input type="radio" checked={!slim} onChange={() => setSlim(false)} style={{ accentColor: "var(--accent)" }} /> Steve · 4px arms
+              </label>
+              <label className="flex cursor-pointer items-center gap-1.5 rounded px-1 py-1">
+                <input type="radio" checked={slim} onChange={() => setSlim(true)} style={{ accentColor: "var(--accent)" }} /> Alex · slim arms
+              </label>
+            </div>
+          </div>
+          <div className="min-w-36">
+            <SectionLabel>Layer</SectionLabel>
+            <div className="flex flex-col gap-1">
+              <label className="flex cursor-pointer items-center gap-1.5 px-1 py-1 text-[12.5px]">
+                <input type="checkbox" checked={showOverlay} onChange={(e) => setShowOverlay(e.target.checked)} style={{ accentColor: "var(--accent)" }} /> Outer layer
+              </label>
+              <RailBtn onClick={clearOverlay}>
+                <span className="flex items-center gap-1.5"><Eraser className="size-3.5" aria-hidden style={{ color: "var(--muted)" }} /> Erase outer layer</span>
+              </RailBtn>
+            </div>
+          </div>
+        </div>
 
-      <div className="flex flex-wrap items-center gap-3 rounded-md border border-slate-200 bg-white px-3 py-2 text-[13px] dark:border-slate-700 dark:bg-slate-900">
-        <span className="font-semibold">Model:</span>
-        <label className="flex items-center gap-1.5">
-          <input type="radio" checked={!slim} onChange={() => setSlim(false)} className="accent-emerald-600" /> Steve (classic 4px arms)
-        </label>
-        <label className="flex items-center gap-1.5">
-          <input type="radio" checked={slim} onChange={() => setSlim(true)} className="accent-emerald-600" /> Alex (slim 3px arms)
-        </label>
-        <span className="h-4 w-px bg-slate-200 dark:bg-slate-700" />
-        <label className="flex items-center gap-1.5">
-          <input type="checkbox" checked={showOverlay} onChange={(e) => setShowOverlay(e.target.checked)} className="accent-emerald-600" /> Outer layer
-        </label>
-        <button onClick={clearOverlay} className="flex items-center gap-1 rounded border border-slate-200 px-2 py-1 text-[12px] hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800">
-          <Eraser className="size-3.5" aria-hidden /> Erase outer layer
-        </button>
+        {/* center */}
+        <div className="flex min-w-0 flex-1 flex-col" style={{ background: "var(--bg)" }}>
+          <div className="px-3 pt-2" style={{ background: "var(--panel)" }}>
+            <Tabs
+              ariaLabel="Skin view"
+              active={view}
+              onChange={setView}
+              tabs={[
+                { id: "preview", label: "3D Preview" },
+                { id: "layout", label: "2D Layout" },
+              ]}
+            />
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto p-3">
+            {/* Both views stay mounted so switching tabs never loses edits. */}
+            <div className={view === "preview" ? "" : "hidden"}>
+              {skinUrl ? (
+                <Skin3D skinUrl={skinUrl} slim={slim} showOverlay={showOverlay} />
+              ) : (
+                <p className="py-16 text-center text-[13px]" style={{ color: "var(--muted)" }}>Preparing preview…</p>
+              )}
+            </div>
+            <div className={view === "layout" ? "" : "hidden"}>
+              {base && (
+                <PixelEditor key={editKey} ref={ref} width={64} height={64} initialImage={base} showGridDefault={showGrid} onEdit={onEdit} />
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* parts */}
+        <aside className="shrink-0 overflow-y-auto border-t p-3 lg:w-56 lg:border-s lg:border-t-0" style={{ borderColor: "var(--border)", background: "var(--panel)" }} aria-label="Skin parts">
+          <SectionLabel>Parts · live</SectionLabel>
+          <ul className="grid grid-cols-2 gap-1.5 lg:grid-cols-1">
+            {PARTS.map((p) => (
+              <li key={p.id} className="flex items-center gap-2 rounded border px-2 py-1.5" style={{ borderColor: "var(--border)" }}>
+                <PartThumb skinUrl={skinUrl} region={p.region} label={p.label} dimmed={p.id.endsWith("-o") && !showOverlay} />
+                <span className="text-[12px] font-medium">{p.label}</span>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-[11.5px]" style={{ color: "var(--muted)" }}>
+            Thumbnails crop the live 64×64 canvas — no stretching. Edit in 2D Layout to change them.
+          </p>
+        </aside>
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-2">
-        <section aria-label="2D skin editor">
-          <h2 className="mb-1.5 text-[13px] font-bold">2D layout — true 64×64, undistorted</h2>
-          {base && (
-            <PixelEditor key={editKey} ref={ref} width={64} height={64} initialImage={base} onEdit={onEdit} />
-          )}
-        </section>
-        <section aria-label="3D preview">
-          <h2 className="mb-1.5 text-[13px] font-bold">3D preview — live</h2>
-          {skinUrl ? (
-            <Skin3D skinUrl={skinUrl} slim={slim} showOverlay={showOverlay} />
-          ) : (
-            <div className="grid h-64 place-items-center rounded-md border border-dashed border-slate-300 text-[13px] text-slate-500">Edit the skin to see the 3D preview</div>
-          )}
-        </section>
-      </div>
+      <StatusBar
+        items={[
+          <span key="n">{skinName}.png</span>,
+          dirty ? <span key="s" style={{ color: "var(--warn)" }}>● Unsaved</span> : <span key="s">Saved locally</span>,
+          <span key="d">64×64</span>,
+          <span key="m">{slim ? "Alex" : "Steve"}</span>,
+          showOverlay ? <span key="o">Outer on</span> : <span key="o">Outer off</span>,
+        ]}
+      />
     </div>
   );
 }
 
-async function kvSetSafe(key: string, value: string) {
-  const { kvSet } = await import("@/lib/storage");
-  await kvSet(key, value);
+function RailBtn({ children, onClick }: { children: React.ReactNode; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className="ui-transition rounded border px-2 py-[7px] text-start text-[12.5px] font-semibold"
+      style={{ borderColor: "var(--border)" }}
+      onMouseEnter={(e) => ((e.currentTarget as HTMLButtonElement).style.borderColor = "var(--accent)")}
+      onMouseLeave={(e) => ((e.currentTarget as HTMLButtonElement).style.borderColor = "var(--border)")}
+    >
+      {children}
+    </button>
+  );
+}
+
+function PartThumb({ skinUrl, region, label, dimmed }: {
+  skinUrl: string; region: [number, number, number, number]; label: string; dimmed?: boolean;
+}) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    if (!skinUrl || !ref.current) return;
+    const img = new Image();
+    img.onload = () => {
+      const c = ref.current!;
+      const [sx, sy, sw, sh] = region;
+      c.width = sw; c.height = sh;
+      const ctx = c.getContext("2d")!;
+      ctx.imageSmoothingEnabled = false;
+      ctx.clearRect(0, 0, sw, sh);
+      ctx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
+    };
+    img.src = skinUrl;
+  }, [skinUrl, region]);
+  const [, , pW, pH] = region;
+  return (
+    <canvas
+      ref={ref}
+      width={pW}
+      height={pH}
+      className="checker shrink-0 rounded-sm border"
+      style={{ width: pW * 3, height: pH * 3, imageRendering: "pixelated", borderColor: "var(--border)", opacity: dimmed ? 0.3 : 1 }}
+      role="img"
+      aria-label={`${label} region preview`}
+    />
+  );
 }

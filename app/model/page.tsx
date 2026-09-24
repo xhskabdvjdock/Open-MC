@@ -1,9 +1,11 @@
 "use client";
-import { useCallback, useMemo, useState } from "react";
-import { Box, Download, Upload, Wand2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Download, Upload, Wand2, Save } from "lucide-react";
 import { useApp } from "@/components/Providers";
 import { ModelPreview, type McModel } from "@/components/ModelPreview";
 import { downloadBlob } from "@/lib/pixel-utils";
+import { Btn } from "@/components/ui";
+import { consumeNewProject } from "@/components/NewProjectDialog";
 
 const BLANK_MODEL: McModel = {
   textures: { particle: "minecraft:block/stone", all: "minecraft:block/stone" },
@@ -11,10 +13,23 @@ const BLANK_MODEL: McModel = {
 };
 
 export default function ModelPage() {
-  const { notify } = useApp();
+  const { notify, setProject } = useApp();
   const [text, setText] = useState(JSON.stringify(BLANK_MODEL, null, 2));
   const [error, setError] = useState("");
   const [name, setName] = useState("model.json");
+  const [dirty, setDirty] = useState(false);
+
+  useEffect(() => {
+    try {
+      const seed = consumeNewProject("model");
+      if (seed) { setName(`${seed.replace(/\s+/g, "-")}.json`); setDirty(true); }
+    } catch { /* ignore */ }
+  }, []);
+
+  useEffect(() => {
+    setProject({ name, kind: "Model", dirty });
+  }, [name, dirty, setProject]);
+  useEffect(() => () => setProject(null), [setProject]);
 
   const model: McModel | null = useMemo(() => {
     try { return JSON.parse(text); } catch { return null; }
@@ -57,10 +72,11 @@ export default function ModelPage() {
     if (!f) return;
     try {
       const t = await f.text();
-      JSON.parse(t); // validate before accepting
+      JSON.parse(t);
       setText(JSON.stringify(JSON.parse(t), null, 2));
       setError("");
       setName(f.name);
+      setDirty(true);
       notify("Model imported");
     } catch {
       notify("That file is not valid JSON.", "err");
@@ -71,61 +87,97 @@ export default function ModelPage() {
     try {
       const parsed = JSON.parse(text);
       downloadBlob(new Blob([JSON.stringify(parsed, null, 2)], { type: "application/json" }), name || "model.json");
+      setDirty(false);
       notify("Exported");
     } catch {
       notify("Cannot export invalid JSON. Fix errors first.", "err");
     }
   }, [text, name, notify]);
 
+  const save = useCallback(() => {
+    try { JSON.parse(text); setDirty(false); notify("Validated — no export needed"); }
+    catch { notify("Invalid JSON — fix errors first.", "err"); }
+  }, [text, notify]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      const typing = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+      if (!(e.ctrlKey || e.metaKey) || typing) return;
+      if (e.key.toLowerCase() === "s") { e.preventDefault(); save(); }
+      if (e.key.toLowerCase() === "e") { e.preventDefault(); exportJson(); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [save, exportJson]);
+
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex min-h-0 flex-1 flex-col gap-2">
       <div className="flex flex-wrap items-center gap-2">
-        <h1 className="flex items-center gap-2 text-[20px] font-bold tracking-tight"><Box className="size-5 text-emerald-600" aria-hidden /> Model Studio</h1>
+        <input
+          value={name}
+          onChange={(e) => { setName(e.target.value); setDirty(true); }}
+          aria-label="File name"
+          spellCheck={false}
+          className="w-48 rounded border border-transparent bg-transparent px-2 py-1 text-[14px] font-bold outline-none"
+          onFocus={(e) => ((e.target as HTMLInputElement).style.borderColor = "var(--border)")}
+          onBlur={(e) => ((e.target as HTMLInputElement).style.borderColor = "transparent")}
+        />
+        <span className="flex items-center gap-1.5 font-mono text-[11.5px]" style={{ color: "var(--muted)" }} role="status">
+          <span className="inline-block size-2 rounded-full" style={{ background: dirty ? "var(--warn)" : "var(--accent)" }} />
+          {dirty ? "Unsaved changes" : "Saved locally"}
+        </span>
         <span className="ms-auto flex items-center gap-1.5">
-          <label className="flex cursor-pointer items-center gap-1.5 rounded-md border border-slate-200 px-2.5 py-1.5 text-[13px] hover:border-emerald-500 dark:border-slate-700">
-            <Upload className="size-4" aria-hidden /> Import JSON
+          <label className="ui-transition flex cursor-pointer items-center gap-1.5 rounded border px-2.5 py-1.5 text-[13px] font-semibold" style={{ borderColor: "var(--border)" }} title="Import JSON (Ctrl+O)">
+            <Upload className="size-4" aria-hidden /> Import
             <input type="file" accept="application/json,.json" className="hidden" onChange={importFile} />
           </label>
-          <input value={name} onChange={(e) => setName(e.target.value)} aria-label="File name" className="w-40 rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[13px] dark:border-slate-700 dark:bg-slate-900" />
-          <button onClick={exportJson} className="flex items-center gap-1.5 rounded-md bg-emerald-600 px-3 py-1.5 text-[13px] font-semibold text-white hover:bg-emerald-700">
-            <Download className="size-4" aria-hidden /> Export JSON
-          </button>
+          <Btn onClick={save} title="Validate (Ctrl+S)">
+            <Save className="size-4" aria-hidden /> Save
+          </Btn>
+          <Btn primary onClick={exportJson} title="Export JSON (Ctrl+E)">
+            <Download className="size-4" aria-hidden /> Export
+          </Btn>
         </span>
       </div>
-      <div className="grid gap-4 xl:grid-cols-2">
-        <section className="rounded-md border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900">
-          <div className="mb-1.5 flex items-center gap-2">
-            <h2 className="text-[13px] font-bold">JSON editor</h2>
-            <button onClick={format} className="flex items-center gap-1 rounded border border-slate-200 px-2 py-0.5 text-[12px] hover:border-emerald-500 dark:border-slate-700">
+
+      <div className="grid min-h-[520px] flex-1 gap-0 lg:grid-cols-2" style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", background: "var(--panel)", overflow: "hidden" }}>
+        <section className="flex min-w-0 flex-col border-b p-3 lg:border-b-0 lg:border-e" style={{ borderColor: "var(--border)" }} aria-label="JSON editor">
+          <div className="mb-1.5 flex items-center gap-1.5">
+            <button onClick={format} className="ui-transition flex items-center gap-1 rounded border px-2 py-1 text-[12px] font-semibold" style={{ borderColor: "var(--border)" }}>
               <Wand2 className="size-3.5" aria-hidden /> Format
             </button>
-            <button onClick={() => { setText(JSON.stringify(BLANK_MODEL, null, 2)); setError(""); }} className="rounded border border-slate-200 px-2 py-0.5 text-[12px] hover:border-emerald-500 dark:border-slate-700">
+            <button onClick={() => { setText(JSON.stringify(BLANK_MODEL, null, 2)); setError(""); setDirty(true); }} className="ui-transition rounded border px-2 py-1 text-[12px] font-semibold" style={{ borderColor: "var(--border)" }}>
               Blank cube
             </button>
+            <span className="ms-auto font-mono text-[11.5px]" style={{ color: error ? "var(--danger)" : issues.length === 0 ? "var(--accent)" : "var(--warn)" }}>
+              {error ? "syntax error" : issues.length === 0 ? "valid" : `${issues.length} issue(s)`}
+            </span>
           </div>
           <textarea
             value={text}
-            onChange={(e) => { setText(e.target.value); setError(""); }}
-            rows={24}
+            onChange={(e) => { setText(e.target.value); setError(""); setDirty(true); }}
+            rows={22}
             spellCheck={false}
             aria-label="Model JSON"
-            className="w-full rounded-md border border-slate-200 bg-slate-50 p-2 font-mono text-[12px] dark:border-slate-700 dark:bg-slate-950"
+            className="w-full flex-1 rounded border p-2 font-mono text-[12px] outline-none"
+            style={{ borderColor: error ? "var(--danger)" : "var(--border)", background: "var(--panel-2)" }}
           />
-          {error && <p className="mt-1 text-[12px] text-red-600" role="alert">{error}</p>}
-          <div className="mt-2 rounded-md border border-slate-200 p-2 text-[12.5px] dark:border-slate-700" aria-live="polite">
-            <p className="font-bold">Validation</p>
+          {error && <p className="mt-1.5 text-[12px]" style={{ color: "var(--danger)" }} role="alert">{error}</p>}
+          <div className="mt-2 rounded border p-2 text-[12.5px]" style={{ borderColor: "var(--border)", background: "var(--panel-2)" }} aria-live="polite">
+            <p className="font-bold">Diagnostics</p>
             {issues.length === 0 ? (
-              <p className="text-emerald-600">Valid model JSON.</p>
+              <p className="mt-0.5" style={{ color: "var(--accent)" }}>Valid model JSON.</p>
             ) : (
-              <ul className="list-inside list-disc text-amber-700 dark:text-amber-300">
+              <ul className="mt-0.5 list-inside list-disc" style={{ color: "var(--warn)" }}>
                 {issues.map((i, k) => <li key={k}>{i}</li>)}
               </ul>
             )}
           </div>
         </section>
-        <section className="rounded-md border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900">
-          <h2 className="mb-1.5 text-[13px] font-bold">3D preview</h2>
+        <section className="flex min-w-0 flex-col p-3" style={{ background: "var(--bg)" }} aria-label="3D preview">
           <ModelPreview model={model} />
+          {!model && <p className="mt-2 text-center text-[12.5px]" style={{ color: "var(--danger)" }}>Invalid JSON — fix syntax to preview.</p>}
         </section>
       </div>
     </div>
