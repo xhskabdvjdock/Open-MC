@@ -110,6 +110,7 @@ export function Sidebar() {
       aria-label="Main"
       className="flex h-full flex-col"
       style={{ background: "var(--panel)", width: collapsed && !isDrawer ? 56 : 232, transition: "width var(--t-fast)" }}
+      suppressHydrationWarning
     >
       <div className={`flex items-center gap-2.5 px-3.5 pb-2.5 pt-3.5 ${collapsed && !isDrawer ? "justify-center px-0" : ""}`}>
         <span
@@ -121,8 +122,8 @@ export function Sidebar() {
         </span>
         {(!collapsed || isDrawer) && (
           <div className="leading-tight">
-            <div className="text-[14px] font-bold tracking-tight">{s("appName")}</div>
-            <div className="text-[10.5px]" style={{ color: "var(--faint)" }}>{s("tagline")}</div>
+            <div className="text-[14px] font-bold tracking-tight" suppressHydrationWarning>{s("appName")}</div>
+            <div className="text-[10.5px]" style={{ color: "var(--faint)" }} suppressHydrationWarning>{s("tagline")}</div>
           </div>
         )}
       </div>

@@ -52,6 +52,8 @@ export function Providers({ children }: { children: React.ReactNode }) {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [project, setProject] = useState<CurrentProject | null>(null);
+  const [hasMounted, setHasMounted] = useState(false);
+  useEffect(() => setHasMounted(true), []);
 
   useEffect(() => {
     let live = true;
@@ -115,7 +117,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
     setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 3200);
   }, []);
 
-  const t = useMemo(() => STRINGS[lang] as unknown as (typeof STRINGS)["en"], [lang]);
+  const t = useMemo(() => STRINGS[hasMounted ? lang : "en"] as unknown as (typeof STRINGS)["en"], [lang, hasMounted]);
 
   const value: AppCtx = {
     lang, setLang, t, theme, setTheme, resolvedDark,
