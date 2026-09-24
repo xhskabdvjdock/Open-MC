@@ -48,11 +48,27 @@ export default function SkinPage() {
   const [editKey, setEditKey] = useState(0);
   const [slim, setSlim] = useState(false);
   const [showOverlay, setShowOverlay] = useState(true);
+  const [visible, setVisible] = useState({ head: true, body: true, lArm: true, rArm: true, lLeg: true, rLeg: true });
+  const [paintOn3D, setPaintOn3D] = useState(false);
   const [skinUrl, setSkinUrl] = useState("");
   const [skinName, setSkinName] = useState("my-skin");
   const [dirty, setDirty] = useState(false);
   const [view, setView] = useState<"preview" | "layout">("preview");
   const ref = useRef<PixelEditorHandle>(null);
+  const paintingOn3DRef = useRef(false);
+
+  const handle3DPaint = useCallback((x: number, y: number) => {
+    ref.current?.paintAt(x, y);
+  }, []);
+  const handle3DPaintStart = useCallback(() => {
+    paintingOn3DRef.current = true;
+  }, []);
+  const handle3DPaintEnd = useCallback(() => {
+    if (paintingOn3DRef.current) {
+      paintingOn3DRef.current = false;
+      ref.current?.commitStroke();
+    }
+  }, []);
 
   useEffect(() => {
     let live = true;
@@ -295,8 +311,44 @@ export default function SkinPage() {
           <div className="min-h-0 flex-1 overflow-y-auto p-3">
             {/* Both views stay mounted so switching tabs never loses edits. */}
             <div className={view === "preview" ? "" : "hidden"}>
+              <div className="mb-2 flex flex-wrap items-center gap-2 rounded border px-2 py-1.5" style={{ borderColor: "var(--border)", background: "var(--panel)" }}>
+                <label className="flex items-center gap-1.5 text-[12px] font-semibold" style={{ color: paintOn3D ? "var(--accent)" : "var(--muted)" }}>
+                  <input type="checkbox" checked={paintOn3D} onChange={(e) => setPaintOn3D(e.target.checked)} style={{ accentColor: "var(--accent)" }} />
+                  Paint on 3D
+                </label>
+                <span className="text-[11px]" style={{ color: "var(--faint)" }}>{paintOn3D ? "Click/drag on model to paint" : "Drag to rotate"}</span>
+                <span className="ms-auto flex flex-wrap items-center gap-1 text-[11px]">
+                  {([
+                    ["head", "Head"],
+                    ["body", "Body"],
+                    ["rArm", "R-Arm"],
+                    ["lArm", "L-Arm"],
+                    ["rLeg", "R-Leg"],
+                    ["lLeg", "L-Leg"],
+                  ] as const).map(([k, label]) => (
+                    <label key={k} className="flex items-center gap-1 rounded border px-1.5 py-0.5" style={{ borderColor: visible[k as keyof typeof visible] ? "var(--accent)" : "var(--border)", opacity: visible[k as keyof typeof visible] ? 1 : 0.45 }}>
+                      <input
+                        type="checkbox"
+                        checked={visible[k as keyof typeof visible]}
+                        onChange={(e) => setVisible((v) => ({ ...v, [k]: e.target.checked }))}
+                        style={{ accentColor: "var(--accent)" }}
+                      />
+                      {label}
+                    </label>
+                  ))}
+                </span>
+              </div>
               {skinUrl ? (
-                <Skin3D skinUrl={skinUrl} slim={slim} showOverlay={showOverlay} />
+                <Skin3D
+                  skinUrl={skinUrl}
+                  slim={slim}
+                  showOverlay={showOverlay}
+                  visible={visible}
+                  paintMode={paintOn3D}
+                  onPaint={handle3DPaint}
+                  onPaintStart={handle3DPaintStart}
+                  onPaintEnd={handle3DPaintEnd}
+                />
               ) : (
                 <p className="py-16 text-center text-[13px]" style={{ color: "var(--muted)" }}>Preparing preview…</p>
               )}
@@ -311,17 +363,43 @@ export default function SkinPage() {
 
         {/* parts */}
         <aside className="shrink-0 overflow-y-auto border-t p-3 lg:w-56 lg:border-s lg:border-t-0" style={{ borderColor: "var(--border)", background: "var(--panel)" }} aria-label="Skin parts">
-          <SectionLabel>Parts · live</SectionLabel>
+          <SectionLabel>Parts · live — click to hide in 3D</SectionLabel>
           <ul className="grid grid-cols-2 gap-1.5 lg:grid-cols-1">
-            {PARTS.map((p) => (
-              <li key={p.id} className="flex items-center gap-2 rounded border px-2 py-1.5" style={{ borderColor: "var(--border)" }}>
-                <PartThumb skinUrl={skinUrl} region={p.region} label={p.label} dimmed={p.id.endsWith("-o") && !showOverlay} />
-                <span className="text-[12px] font-medium">{p.label}</span>
-              </li>
-            ))}
+            {PARTS.map((p) => {
+              const isOuter = p.id.endsWith("-o");
+              const baseId = isOuter ? p.id.slice(0, -2) : p.id;
+              // Map part id to visible key: head -> head, body -> body, arm-r -> rArm, etc.
+              const visKey = (
+                baseId === "head" ? "head" :
+                baseId === "body" ? "body" :
+                baseId === "arm-r" ? "rArm" :
+                baseId === "arm-l" ? "lArm" :
+                baseId === "leg-r" ? "rLeg" :
+                baseId === "leg-l" ? "lLeg" : null
+              ) as keyof typeof visible | null;
+              const isVisible = visKey ? visible[visKey] : true;
+              const dimmed = isOuter ? (!showOverlay || !isVisible) : !isVisible;
+              const toggle = () => {
+                if (!visKey) return;
+                setVisible((v) => ({ ...v, [visKey]: !v[visKey] }));
+              };
+              return (
+                <li key={p.id}>
+                  <button
+                    onClick={toggle}
+                    className="flex w-full items-center gap-2 rounded border px-2 py-1.5 text-start"
+                    style={{ borderColor: isVisible && (!isOuter || showOverlay) ? "var(--border)" : "var(--border)", opacity: dimmed ? 0.35 : 1 }}
+                    title={dimmed ? "Hidden in 3D — click to show" : "Visible in 3D — click to hide"}
+                  >
+                    <PartThumb skinUrl={skinUrl} region={p.region} label={p.label} dimmed={dimmed} />
+                    <span className="text-[12px] font-medium">{p.label}</span>
+                  </button>
+                </li>
+              );
+            })}
           </ul>
           <p className="mt-2 text-[11.5px]" style={{ color: "var(--muted)" }}>
-            Thumbnails crop the live 64×64 canvas — no stretching. Edit in 2D Layout to change them.
+            Thumbnails crop the live 64×64 canvas. Click a part to hide/show it in the 3D view — useful to paint occluded areas.
           </p>
         </aside>
       </div>

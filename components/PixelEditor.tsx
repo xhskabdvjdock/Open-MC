@@ -9,6 +9,10 @@ export interface PixelEditorHandle {
   getBlob: () => Promise<Blob | null>;
   setImage: (img: HTMLImageElement | HTMLCanvasElement) => void;
   clearHistory: () => void;
+  paintAt: (x: number, y: number) => void;
+  commitStroke: () => void;
+  getColor: () => string;
+  getBrushSize: () => number;
 }
 
 interface Props {
@@ -281,6 +285,31 @@ export const PixelEditor = React.forwardRef<PixelEditorHandle, Props>(function P
       render();
     },
     clearHistory: () => { history.current = []; hIndex.current = -1; pushHistory(); },
+    paintAt: (x: number, y: number) => {
+      const c = dataRef.current;
+      if (!c) return;
+      if (x < 0 || y < 0 || x >= width || y >= height) return;
+      const ctx = c.getContext("2d", { willReadFrequently: true })!;
+      const isEraser = tool === "eraser";
+      const rgba = isEraser ? null : hexToRgbaLocal(color);
+      // Reuse same direct-draw path as pencil so history/render stay consistent
+      const r0 = Math.floor((brushSize - 1) / 2);
+      const bx = x - r0, by = y - r0;
+      if (isEraser) {
+        ctx.clearRect(bx, by, brushSize, brushSize);
+      } else {
+        const [r, g, b, a] = rgba as [number, number, number, number];
+        ctx.clearRect(bx, by, brushSize, brushSize);
+        ctx.fillStyle = `rgba(${r},${g},${b},${a / 255})`;
+        ctx.globalCompositeOperation = "source-over";
+        ctx.fillRect(bx, by, brushSize, brushSize);
+      }
+      render();
+      onEdit?.();
+    },
+    commitStroke: () => { pushHistory(); render(); onEdit?.(); },
+    getColor: () => color,
+    getBrushSize: () => brushSize,
   }));
 
   const posFromEvent = (e: React.PointerEvent): [number, number] => {
