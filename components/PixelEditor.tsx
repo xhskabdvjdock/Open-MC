@@ -321,9 +321,21 @@ export const PixelEditor = React.forwardRef<PixelEditorHandle, Props>(function P
     strokeColor.current = hexToRgbaLocal(color);
     if (tool === "pencil" || tool === "eraser") {
       if (x < 0 || y < 0 || x >= width || y >= height) return;
-      const img = ctx.getImageData(0, 0, width, height);
-      paintBrush(img, x, y, brushSize, strokeIsEraser.current ? null : strokeColor.current);
-      ctx.putImageData(img, 0, 0);
+      // Direct canvas draw — no get/put of the whole ImageData, so neighbouring
+      // pixels can never be touched by a read-modify-write of the entire buffer.
+      // This is the fix for “gradient changes on other pixels while holding”.
+      const r0 = Math.floor((brushSize - 1) / 2);
+      const bx = x - r0, by = y - r0;
+      if (strokeIsEraser.current) {
+        ctx.clearRect(bx, by, brushSize, brushSize);
+      } else {
+        const [r, g, b, a] = strokeColor.current;
+        // Clear first so semi-transparent colours replace exactly, not blend
+        ctx.clearRect(bx, by, brushSize, brushSize);
+        ctx.fillStyle = `rgba(${r},${g},${b},${a / 255})`;
+        ctx.globalCompositeOperation = "source-over";
+        ctx.fillRect(bx, by, brushSize, brushSize);
+      }
       render();
     }
   };
@@ -341,18 +353,22 @@ export const PixelEditor = React.forwardRef<PixelEditorHandle, Props>(function P
     const [x, y] = posFromEvent(e);
     const [sx, sy] = startPt.current ?? [x, y];
     if (tool === "pencil" || tool === "eraser") {
-      // Strict: exactly the pixel(s) under the cursor, nothing else.
-      // We do NOT interpolate between previous and current — each pointer event
-      // paints ONLY the square brush centred on the current logical pixel.
-      // Hold and drag still paints many pixels (one per sampled position), but
-      // a pixel the mouse never visited will never change. This is what you asked:
-      // “only the selected pixel, no other”.
+      // Strict: exactly the brush square under the cursor, nothing else.
+      // No get/put of the whole canvas — direct fill/clear of 1×1..n×n so
+      // neighbouring pixels' gradients can never be touched.
       if (x < 0 || y < 0 || x >= width || y >= height) return;
-      if (sx === x && sy === y) return; // same logical pixel as last event
-      const rgba = strokeIsEraser.current ? null : strokeColor.current;
-      const img = ctx.getImageData(0, 0, width, height);
-      paintBrush(img, x, y, brushSize, rgba);
-      ctx.putImageData(img, 0, 0);
+      if (sx === x && sy === y) return;
+      const r0 = Math.floor((brushSize - 1) / 2);
+      const bx = x - r0, by = y - r0;
+      if (strokeIsEraser.current) {
+        ctx.clearRect(bx, by, brushSize, brushSize);
+      } else {
+        const [r, g, b, a] = strokeColor.current;
+        ctx.clearRect(bx, by, brushSize, brushSize);
+        ctx.fillStyle = `rgba(${r},${g},${b},${a / 255})`;
+        ctx.globalCompositeOperation = "source-over";
+        ctx.fillRect(bx, by, brushSize, brushSize);
+      }
       startPt.current = [x, y];
       render();
     } else if (tool === "line" || tool === "rect") {
