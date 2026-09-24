@@ -68,11 +68,56 @@ function drawLinePixels(data: ImageData, x0: number, y0: number, x1: number, y1:
 }
 
 function hexToRgbaLocal(hex: string): [number, number, number, number] {
-  let h = hex.replace("#", "");
+  let h = hex.replace("#", "").trim();
+  if (!/^[0-9a-fA-F]{3,8}$/.test(h)) return [0, 0, 0, 255];
   if (h.length === 3) h = h.split("").map((c) => c + c).join("");
   if (h.length === 6) h += "ff";
+  if (h.length === 4) h = h.split("").map((c) => c + c).join(""); // #rgba -> #rrggbbaa
   const n = parseInt(h, 16);
   return [(n >> 24) & 255, (n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+function paintBrush(
+  data: ImageData,
+  cx: number,
+  cy: number,
+  size: number,
+  rgba: [number, number, number, number] | null
+): void {
+  const { width, height } = data;
+  const d = data.data;
+  const r0 = Math.floor((size - 1) / 2);
+  const r1 = Math.ceil((size - 1) / 2);
+  // Square brush centred on cursor — predictable, true pixels, no anti-alias
+  for (let dy = -r0; dy <= r1; dy++) {
+    for (let dx = -r0; dx <= r1; dx++) {
+      const x = cx + dx;
+      const y = cy + dy;
+      if (x < 0 || y < 0 || x >= width || y >= height) continue;
+      const i = (y * width + x) * 4;
+      if (rgba === null) {
+        d[i + 3] = 0; // eraser — just clear alpha, keep rgb for later
+      } else {
+        d[i] = rgba[0]; d[i + 1] = rgba[1]; d[i + 2] = rgba[2]; d[i + 3] = rgba[3];
+      }
+    }
+  }
+}
+
+function bresenhamLine(
+  x0: number, y0: number, x1: number, y1: number,
+  visit: (x: number, y: number) => void
+): void {
+  const dx = Math.abs(x1 - x0), dy = Math.abs(y1 - y0);
+  const sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
+  let err = dx - dy, x = x0, y = y0;
+  for (;;) {
+    visit(x, y);
+    if (x === x1 && y === y1) break;
+    const e2 = 2 * err;
+    if (e2 > -dy) { err -= dy; x += sx; }
+    if (e2 < dx) { err += dx; y += sy; }
+  }
 }
 
 export const PixelEditor = React.forwardRef<PixelEditorHandle, Props>(function PixelEditor(
@@ -86,8 +131,10 @@ export const PixelEditor = React.forwardRef<PixelEditorHandle, Props>(function P
   const [zoom, setZoom] = useState(8);
   const [grid, setGrid] = useState(showGridDefault);
   const [fillShapes, setFillShapes] = useState(false);
+  const [brushSize, setBrushSize] = useState(1);
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
+  const [hover, setHover] = useState<[number, number] | null>(null);
 
   useEffect(() => { onZoomChange?.(zoom); }, [zoom, onZoomChange]);
   const history = useRef<ImageData[]>([]);
@@ -270,25 +317,24 @@ export const PixelEditor = React.forwardRef<PixelEditorHandle, Props>(function P
     drawing.current = true;
     startPt.current = [x, y];
     snapshot.current = clonePixels(ctx, width, height);
-    // Capture stroke color once so mid-stroke picker changes never mutate already-painted pixels in this stroke
+    // Capture stroke color/brush once so the whole drag is predictable
     strokeIsEraser.current = tool === "eraser";
     strokeColor.current = hexToRgbaLocal(color);
     if (tool === "pencil" || tool === "eraser") {
       if (x < 0 || y < 0 || x >= width || y >= height) return;
       const img = ctx.getImageData(0, 0, width, height);
-      const i = (y * width + x) * 4;
-      if (strokeIsEraser.current) {
-        img.data[i + 3] = 0;
-      } else {
-        const [r, g, b, a] = strokeColor.current;
-        img.data[i] = r; img.data[i + 1] = g; img.data[i + 2] = b; img.data[i + 3] = a;
-      }
+      paintBrush(img, x, y, brushSize, strokeIsEraser.current ? null : strokeColor.current);
       ctx.putImageData(img, 0, 0);
       render();
     }
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
+    // Always update hover preview (visible even when not drawing)
+    if (!drawing.current) {
+      const [hx, hy] = posFromEvent(e);
+      setHover([hx, hy]);
+    }
     if (!drawing.current) return;
     const c = dataRef.current;
     if (!c) return;
@@ -296,20 +342,14 @@ export const PixelEditor = React.forwardRef<PixelEditorHandle, Props>(function P
     const [x, y] = posFromEvent(e);
     const [sx, sy] = startPt.current ?? [x, y];
     if (tool === "pencil" || tool === "eraser") {
-      // Single true pixel under the cursor only — never interpolates to neighbours.
-      // The whole stroke uses the color captured at pointerDown, so other pixels
-      // in the same drag never get recoloured when you keep holding the mouse.
+      // Brush-aware freehand: we interpolate a 1px-step Bresenham line between previous
+      // and current so a fast drag never leaves gaps, but each step paints ONLY the
+      // square brush (size × size) centred on that step — so pixels you never hovered
+      // over never change. Whole stroke is locked to the color captured at pointerDown.
       if (x < 0 || y < 0 || x >= width || y >= height) return;
-      // Skip duplicate events for the exact same logical pixel (common at high zoom)
-      if (sx === x && sy === y) return;
+      const rgba = strokeIsEraser.current ? null : strokeColor.current;
       const img = ctx.getImageData(0, 0, width, height);
-      const i = (y * width + x) * 4;
-      if (strokeIsEraser.current) {
-        img.data[i + 3] = 0;
-      } else {
-        const [r, g, b, a] = strokeColor.current;
-        img.data[i] = r; img.data[i + 1] = g; img.data[i + 2] = b; img.data[i + 3] = a;
-      }
+      bresenhamLine(sx, sy, x, y, (bx, by) => paintBrush(img, bx, by, brushSize, rgba));
       ctx.putImageData(img, 0, 0);
       startPt.current = [x, y];
       render();
@@ -347,6 +387,15 @@ export const PixelEditor = React.forwardRef<PixelEditorHandle, Props>(function P
     drawing.current = false;
     snapshot.current = null;
     commit();
+  };
+
+  const onPointerLeave = (e: React.PointerEvent) => {
+    setHover(null);
+    onPointerUp();
+  };
+  const onPointerEnter = (e: React.PointerEvent) => {
+    const [hx, hy] = posFromEvent(e);
+    setHover([hx, hy]);
   };
 
   const tools: { id: PixelTool; Icon: React.ElementType; label: string }[] = [
@@ -406,6 +455,25 @@ export const PixelEditor = React.forwardRef<PixelEditorHandle, Props>(function P
           style={{ borderColor: "var(--border)", background: "var(--panel)" }}
         />
         <span className="mx-1 h-5 w-px" style={{ background: "var(--border)" }} aria-hidden />
+        <label className="flex items-center gap-1 text-[11px] font-semibold" style={{ color: "var(--muted)" }}>
+          Brush
+          <select
+            value={brushSize}
+            onChange={(e) => setBrushSize(parseInt(e.target.value, 10))}
+            aria-label="Brush size"
+            title="Pen size — how many true pixels are painted at once (square, centred)"
+            className="rounded border px-1 py-1 text-[12px]"
+            style={{ borderColor: "var(--border)", background: "var(--panel)" }}
+          >
+            <option value={1}>1 px</option>
+            <option value={2}>2 px</option>
+            <option value={3}>3 px</option>
+            <option value={4}>4 px</option>
+            <option value={6}>6 px</option>
+            <option value={8}>8 px</option>
+          </select>
+        </label>
+        <span className="mx-1 h-5 w-px" style={{ background: "var(--border)" }} aria-hidden />
         <button onClick={undo} disabled={!canUndo} aria-label="Undo (Ctrl+Z)" title="Undo (Ctrl+Z)" className="ui-transition rounded p-2 disabled:opacity-35" style={{ color: "var(--muted)" }}>
           <Undo2 className="size-4" aria-hidden />
         </button>
@@ -437,20 +505,39 @@ export const PixelEditor = React.forwardRef<PixelEditorHandle, Props>(function P
           </label>
         )}
       </div>
-      <div className="checker overflow-auto rounded border p-3" style={{ borderColor: "var(--border)" }}>
+      <div className="checker relative overflow-auto rounded border p-3" style={{ borderColor: "var(--border)" }}>
         <canvas
           ref={viewRef}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
-          onPointerLeave={onPointerUp}
+          onPointerLeave={onPointerLeave}
+          onPointerEnter={onPointerEnter}
           className="pixel mx-auto block max-w-none cursor-crosshair touch-none rounded-sm"
           style={{ boxShadow: "var(--shadow-pop)" }}
           role="application"
           aria-label={`Pixel canvas ${width} by ${height}`}
         />
+        {/* True-pixel hover preview — shows exactly what the brush will paint, no guesswork */}
+        {hover && (tool === "pencil" || tool === "eraser" || tool === "line" || tool === "rect") && (
+          <div
+            aria-hidden
+            className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-sm border"
+            style={{
+              width: brushSize * zoom,
+              height: brushSize * zoom,
+              // centre the preview on the hovered logical pixel, accounting for odd/even brush
+              marginLeft: (hover[0] - width / 2 + 0.5) * zoom - ((brushSize * zoom) / 2),
+              marginTop: (hover[1] - height / 2 + 0.5) * zoom - ((brushSize * zoom) / 2),
+              borderColor: tool === "eraser" ? "var(--danger)" : "var(--accent)",
+              background: tool === "eraser" ? "rgba(220,38,38,0.18)" : "color-mix(in oklab, var(--accent) 22%, transparent)",
+              boxShadow: "0 0 0 1px var(--panel)",
+              opacity: drawing.current ? 0 : 0.95,
+            }}
+          />
+        )}
         <p className="mt-2 text-center font-mono text-[11px]" style={{ color: "var(--faint)" }}>
-          {width}×{height} px · no smoothing · alpha preserved
+          {width}×{height} px · {brushSize}×{brushSize} brush · no smoothing · alpha preserved · Pencil paints only pixels you hovered
         </p>
       </div>
     </div>
