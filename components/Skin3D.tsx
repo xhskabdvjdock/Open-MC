@@ -89,26 +89,34 @@ function Box({ w, h, d, faces, transform, paintHandlers }: {
   const ws = w * S, hs = h * S, ds = d * S;
   const base: React.CSSProperties = { position: "absolute", imageRendering: "pixelated" as const };
   const fh = paintHandlers;
-  const pm = fh?.paintMode;
-  const op = fh?.onPaint;
-  const ops = fh?.onPaintStart;
-  const ope = fh?.onPaintEnd;
-  const getFaceProps = (f: { ux: number; uy: number; w: number; h: number }) =>
-    fh ? paintForFace(f.ux, f.uy, f.w, f.h, pm, op, ops, ope) : ({} as Record<string, unknown>);
-  const frontProps = getFaceProps(fh?.front ?? { ux: 0, uy: 0, w: 0, h: 0 });
-  const backProps = getFaceProps(fh?.back ?? { ux: 0, uy: 0, w: 0, h: 0 });
-  const rightProps = getFaceProps(fh?.right ?? { ux: 0, uy: 0, w: 0, h: 0 });
-  const leftProps = getFaceProps(fh?.left ?? { ux: 0, uy: 0, w: 0, h: 0 });
-  const topProps = getFaceProps(fh?.top ?? { ux: 0, uy: 0, w: 0, h: 0 });
-  const bottomProps = getFaceProps(fh?.bottom ?? { ux: 0, uy: 0, w: 0, h: 0 });
+  // When not painting, render plain faces (no handlers)
+  if (!fh?.paintMode || !fh.onPaint) {
+    return (
+      <div style={{ position: "absolute", transformStyle: "preserve-3d", transform, width: ws, height: hs }}>
+        <div style={{ ...base, ...faces.front, transform: `translateZ(${ds / 2}px)` }} />
+        <div style={{ ...base, ...faces.back, transform: `rotateY(180deg) translateZ(${ds / 2}px)` }} />
+        <div style={{ ...base, ...faces.right, width: ds, height: hs, left: (ws - ds) / 2, transform: `rotateY(-90deg) translateZ(${ws / 2}px)` }} />
+        <div style={{ ...base, ...faces.left, width: ds, height: hs, left: (ws - ds) / 2, transform: `rotateY(90deg) translateZ(${ws / 2}px)` }} />
+        <div style={{ ...base, ...faces.top, width: ws, height: ds, top: (hs - ds) / 2, transform: `rotateX(90deg) translateZ(${hs / 2}px)` }} />
+        <div style={{ ...base, ...faces.bottom, width: ws, height: ds, top: (hs - ds) / 2, transform: `rotateX(-90deg) translateZ(${hs / 2}px)` }} />
+      </div>
+    );
+  }
+  const pm = fh.paintMode, op = fh.onPaint, ops = fh.onPaintStart, ope = fh.onPaintEnd;
+  const frontH = paintForFace(fh.front.ux, fh.front.uy, fh.front.w, fh.front.h, pm, op, ops, ope);
+  const backH = paintForFace(fh.back.ux, fh.back.uy, fh.back.w, fh.back.h, pm, op, ops, ope);
+  const rightH = paintForFace(fh.right.ux, fh.right.uy, fh.right.w, fh.right.h, pm, op, ops, ope);
+  const leftH = paintForFace(fh.left.ux, fh.left.uy, fh.left.w, fh.left.h, pm, op, ops, ope);
+  const topH = paintForFace(fh.top.ux, fh.top.uy, fh.top.w, fh.top.h, pm, op, ops, ope);
+  const bottomH = paintForFace(fh.bottom.ux, fh.bottom.uy, fh.bottom.w, fh.bottom.h, pm, op, ops, ope);
   return (
     <div style={{ position: "absolute", transformStyle: "preserve-3d", transform, width: ws, height: hs }}>
-      <div style={{ ...base, ...faces.front, transform: `translateZ(${ds / 2}px)`, ...(frontProps as { style?: object })?.style as object }} {...(frontProps as object)} />
-      <div style={{ ...base, ...faces.back, transform: `rotateY(180deg) translateZ(${ds / 2}px)`, ...(backProps as { style?: object })?.style as object }} {...(backProps as object)} />
-      <div style={{ ...base, ...faces.right, width: ds, height: hs, left: (ws - ds) / 2, transform: `rotateY(-90deg) translateZ(${ws / 2}px)`, ...(rightProps as { style?: object })?.style as object }} {...(rightProps as object)} />
-      <div style={{ ...base, ...faces.left, width: ds, height: hs, left: (ws - ds) / 2, transform: `rotateY(90deg) translateZ(${ws / 2}px)`, ...(leftProps as { style?: object })?.style as object }} {...(leftProps as object)} />
-      <div style={{ ...base, ...faces.top, width: ws, height: ds, top: (hs - ds) / 2, transform: `rotateX(90deg) translateZ(${hs / 2}px)`, ...(topProps as { style?: object })?.style as object }} {...(topProps as object)} />
-      <div style={{ ...base, ...faces.bottom, width: ws, height: ds, top: (hs - ds) / 2, transform: `rotateX(-90deg) translateZ(${hs / 2}px)`, ...(bottomProps as { style?: object })?.style as object }} {...(bottomProps as object)} />
+      <div style={{ ...base, ...faces.front, transform: `translateZ(${ds / 2}px)`, ...(frontH.style as object) }} onPointerDown={frontH.onPointerDown} onPointerMove={frontH.onPointerMove} onPointerUp={frontH.onPointerUp} />
+      <div style={{ ...base, ...faces.back, transform: `rotateY(180deg) translateZ(${ds / 2}px)`, ...(backH.style as object) }} onPointerDown={backH.onPointerDown} onPointerMove={backH.onPointerMove} onPointerUp={backH.onPointerUp} />
+      <div style={{ ...base, ...faces.right, width: ds, height: hs, left: (ws - ds) / 2, transform: `rotateY(-90deg) translateZ(${ws / 2}px)`, ...(rightH.style as object) }} onPointerDown={rightH.onPointerDown} onPointerMove={rightH.onPointerMove} onPointerUp={rightH.onPointerUp} />
+      <div style={{ ...base, ...faces.left, width: ds, height: hs, left: (ws - ds) / 2, transform: `rotateY(90deg) translateZ(${ws / 2}px)`, ...(leftH.style as object) }} onPointerDown={leftH.onPointerDown} onPointerMove={leftH.onPointerMove} onPointerUp={leftH.onPointerUp} />
+      <div style={{ ...base, ...faces.top, width: ws, height: ds, top: (hs - ds) / 2, transform: `rotateX(90deg) translateZ(${hs / 2}px)`, ...(topH.style as object) }} onPointerDown={topH.onPointerDown} onPointerMove={topH.onPointerMove} onPointerUp={topH.onPointerUp} />
+      <div style={{ ...base, ...faces.bottom, width: ws, height: ds, top: (hs - ds) / 2, transform: `rotateX(-90deg) translateZ(${hs / 2}px)`, ...(bottomH.style as object) }} onPointerDown={bottomH.onPointerDown} onPointerMove={bottomH.onPointerMove} onPointerUp={bottomH.onPointerUp} />
     </div>
   );
 }
