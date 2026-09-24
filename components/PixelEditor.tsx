@@ -341,14 +341,17 @@ export const PixelEditor = React.forwardRef<PixelEditorHandle, Props>(function P
     const [x, y] = posFromEvent(e);
     const [sx, sy] = startPt.current ?? [x, y];
     if (tool === "pencil" || tool === "eraser") {
-      // Continuous stroke: press once and drag to paint many pixels.
-      // We interpolate a Bresenham line between the last and current logical pixel
-      // so a fast drag never leaves gaps, but each step paints ONLY the square brush
-      // (size × size). No other pixels outside that line ever change.
+      // Strict: exactly the pixel(s) under the cursor, nothing else.
+      // We do NOT interpolate between previous and current — each pointer event
+      // paints ONLY the square brush centred on the current logical pixel.
+      // Hold and drag still paints many pixels (one per sampled position), but
+      // a pixel the mouse never visited will never change. This is what you asked:
+      // “only the selected pixel, no other”.
       if (x < 0 || y < 0 || x >= width || y >= height) return;
+      if (sx === x && sy === y) return; // same logical pixel as last event
       const rgba = strokeIsEraser.current ? null : strokeColor.current;
       const img = ctx.getImageData(0, 0, width, height);
-      bresenhamLine(sx, sy, x, y, (bx, by) => paintBrush(img, bx, by, brushSize, rgba));
+      paintBrush(img, x, y, brushSize, rgba);
       ctx.putImageData(img, 0, 0);
       startPt.current = [x, y];
       render();
