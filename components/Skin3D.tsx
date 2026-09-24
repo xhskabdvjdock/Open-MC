@@ -131,7 +131,7 @@ export function Skin3D({
   onPaintStart,
   onPaintEnd,
 }: Props) {
-  const [yaw, setYaw] = useState(-18);
+  const [yaw, setYaw] = useState(0);
   const [pitch, setPitch] = useState(0);
   const [zoom, setZoom] = useState(1);
   const drag = React.useRef<{ x: number; y: number; yaw: number; pitch: number } | null>(null);
