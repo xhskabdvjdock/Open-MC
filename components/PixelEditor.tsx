@@ -401,30 +401,38 @@ export const PixelEditor = React.forwardRef<PixelEditorHandle, Props>(function P
       startPt.current = [x, y];
       render();
     } else if (tool === "line" || tool === "rect") {
-      // preview from snapshot
+      // Preview — restore snapshot then draw shape directly (no getImageData of whole canvas)
+      // This was the real culprit for “other pixels’ gradient changes while dragging rectangle/line”
       ctx.putImageData(snapshot.current!, 0, 0);
-      const img = ctx.getImageData(0, 0, width, height);
-      const rgba = hexToRgbaLocal(color);
+      ctx.imageSmoothingEnabled = false;
+      const [r, g, b, a] = hexToRgbaLocal(color);
+      ctx.fillStyle = `rgba(${r},${g},${b},${a / 255})`;
+      ctx.globalCompositeOperation = "source-over";
       if (tool === "line") {
-        drawLinePixels(img, startPt.current![0], startPt.current![1], x, y, rgba);
+        bresenhamLine(startPt.current![0], startPt.current![1], x, y, (bx, by) => {
+          if (bx < 0 || by < 0 || bx >= width || by >= height) return;
+          ctx.clearRect(bx, by, 1, 1);
+          ctx.fillRect(bx, by, 1, 1);
+        });
       } else {
         const x0 = Math.min(sx, x), x1 = Math.max(sx, x);
         const y0 = Math.min(sy, y), y1 = Math.max(sy, y);
         if (fillShapes) {
-          for (let py = y0; py <= y1; py++)
-            for (let px = x0; px <= x1; px++) {
-              if (px < 0 || py < 0 || px >= width || py >= height) continue;
-              const i = (py * width + px) * 4;
-              img.data[i] = rgba[0]; img.data[i + 1] = rgba[1]; img.data[i + 2] = rgba[2]; img.data[i + 3] = rgba[3];
-            }
+          const rx = Math.max(0, x0), ry = Math.max(0, y0);
+          const rw = Math.min(width - 1, x1) - rx + 1;
+          const rh = Math.min(height - 1, y1) - ry + 1;
+          if (rw > 0 && rh > 0) {
+            ctx.clearRect(rx, ry, rw, rh);
+            ctx.fillRect(rx, ry, rw, rh);
+          }
         } else {
-          drawLinePixels(img, x0, y0, x1, y0, rgba);
-          drawLinePixels(img, x1, y0, x1, y1, rgba);
-          drawLinePixels(img, x1, y1, x0, y1, rgba);
-          drawLinePixels(img, x0, y1, x0, y0, rgba);
+          // Border — four 1px edges, no ImageData
+          if (y0 >= 0 && y0 < height) { const rx = Math.max(0, x0), rw = Math.min(width - 1, x1) - rx + 1; if (rw > 0) { ctx.clearRect(rx, y0, rw, 1); ctx.fillRect(rx, y0, rw, 1); } }
+          if (y1 >= 0 && y1 < height) { const rx = Math.max(0, x0), rw = Math.min(width - 1, x1) - rx + 1; if (rw > 0) { ctx.clearRect(rx, y1, rw, 1); ctx.fillRect(rx, y1, rw, 1); } }
+          if (x0 >= 0 && x0 < width) { const ry = Math.max(0, y0), rh = Math.min(height - 1, y1) - ry + 1; if (rh > 0) { ctx.clearRect(x0, ry, 1, rh); ctx.fillRect(x0, ry, 1, rh); } }
+          if (x1 >= 0 && x1 < width) { const ry = Math.max(0, y0), rh = Math.min(height - 1, y1) - ry + 1; if (rh > 0) { ctx.clearRect(x1, ry, 1, rh); ctx.fillRect(x1, ry, 1, rh); } }
         }
       }
-      ctx.putImageData(img, 0, 0);
       render();
     }
   };
