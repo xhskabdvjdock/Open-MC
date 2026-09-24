@@ -505,37 +505,40 @@ export const PixelEditor = React.forwardRef<PixelEditorHandle, Props>(function P
           </label>
         )}
       </div>
-      <div className="checker relative overflow-auto rounded border p-3" style={{ borderColor: "var(--border)" }}>
-        <canvas
-          ref={viewRef}
-          onPointerDown={onPointerDown}
-          onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
-          onPointerLeave={onPointerLeave}
-          onPointerEnter={onPointerEnter}
-          className="pixel mx-auto block max-w-none cursor-crosshair touch-none rounded-sm"
-          style={{ boxShadow: "var(--shadow-pop)" }}
-          role="application"
-          aria-label={`Pixel canvas ${width} by ${height}`}
-        />
-        {/* True-pixel hover preview — shows exactly what the brush will paint, no guesswork */}
-        {hover && (tool === "pencil" || tool === "eraser" || tool === "line" || tool === "rect") && (
-          <div
-            aria-hidden
-            className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-sm border"
-            style={{
-              width: brushSize * zoom,
-              height: brushSize * zoom,
-              // centre the preview on the hovered logical pixel, accounting for odd/even brush
-              marginLeft: (hover[0] - width / 2 + 0.5) * zoom - ((brushSize * zoom) / 2),
-              marginTop: (hover[1] - height / 2 + 0.5) * zoom - ((brushSize * zoom) / 2),
-              borderColor: tool === "eraser" ? "var(--danger)" : "var(--accent)",
-              background: tool === "eraser" ? "rgba(220,38,38,0.18)" : "color-mix(in oklab, var(--accent) 22%, transparent)",
-              boxShadow: "0 0 0 1px var(--panel)",
-              opacity: drawing.current ? 0 : 0.95,
-            }}
+      <div className="checker overflow-auto rounded border p-3" style={{ borderColor: "var(--border)" }}>
+        <div
+          className="relative mx-auto"
+          style={{ width: width * zoom, height: height * zoom, boxShadow: "var(--shadow-pop)" }}
+        >
+          <canvas
+            ref={viewRef}
+            onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
+            onPointerUp={onPointerUp}
+            onPointerLeave={onPointerLeave}
+            onPointerEnter={onPointerEnter}
+            className="pixel absolute inset-0 block cursor-crosshair touch-none rounded-sm"
+            role="application"
+            aria-label={`Pixel canvas ${width} by ${height}`}
           />
-        )}
+          {/* True-pixel hover preview — 1:1 over the canvas, centred on the exact pixel(s) the brush will touch */}
+          {hover && (tool === "pencil" || tool === "eraser") && (
+            <div
+              aria-hidden
+              className="pointer-events-none absolute rounded-sm border"
+              style={{
+                width: brushSize * zoom,
+                height: brushSize * zoom,
+                left: hover[0] * zoom - Math.floor((brushSize - 1) / 2) * zoom,
+                top: hover[1] * zoom - Math.floor((brushSize - 1) / 2) * zoom,
+                borderColor: tool === "eraser" ? "var(--danger)" : "var(--accent)",
+                background: tool === "eraser" ? "rgba(220,38,38,0.18)" : "color-mix(in oklab, var(--accent) 22%, transparent)",
+                boxShadow: "0 0 0 1px var(--panel)",
+                opacity: drawing.current ? 0 : 0.95,
+              }}
+            />
+          )}
+        </div>
         <p className="mt-2 text-center font-mono text-[11px]" style={{ color: "var(--faint)" }}>
           {width}×{height} px · {brushSize}×{brushSize} brush · no smoothing · alpha preserved · Pencil paints only pixels you hovered
         </p>
