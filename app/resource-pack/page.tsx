@@ -87,7 +87,7 @@ export default function ResourcePackPage() {
   const [editKey, setEditKey] = useState(0);
   const [dirty, setDirty] = useState(false);
   const [zoom, setZoom] = useState(8);
-  const [expanded, setExpanded] = useState<Set<string>>(new Set(["assets", "assets/minecraft"]));
+  const [expanded, setExpanded] = useState<Set<string>>(new Set(["assets", "assets/minecraft", "assets/minecraft/textures"]));
   const [treeQuery, setTreeQuery] = useState("");
   const [ctx, setCtx] = useState<{ x: number; y: number; path: string; isDir: boolean } | null>(null);
   const [uploadDir, setUploadDir] = useState("");
@@ -95,6 +95,7 @@ export default function ResourcePackPage() {
   const [propsW, setPropsW] = useState(248);
   const [quickReport, setQuickReport] = useState<string | null>(null);
   const [isDesktop, setIsDesktop] = useState(false);
+  const [thumbUrls, setThumbUrls] = useState<Map<string, string>>(new Map());
   const editorRef = useRef<PixelEditorHandle>(null);
   const zipInput = useRef<HTMLInputElement>(null);
   const addInput = useRef<HTMLInputElement>(null);
@@ -118,6 +119,53 @@ export default function ResourcePackPage() {
     mq.addEventListener("change", apply);
     return () => mq.removeEventListener("change", apply);
   }, []);
+
+  // ---- auto-expand textures so drawings are discoverable immediately ----
+  useEffect(() => {
+    if (fileList.some((p) => p.startsWith("assets/minecraft/textures/"))) {
+      setExpanded((prev) => {
+        const next = new Set(prev);
+        next.add("assets");
+        next.add("assets/minecraft");
+        next.add("assets/minecraft/textures");
+        // Also reveal the first level of texture types (block, item, entity…) so user isn't stuck
+        for (const p of fileList) {
+          if (p.startsWith("assets/minecraft/textures/")) {
+            const rest = p.slice("assets/minecraft/textures/".length);
+            const seg = rest.split("/")[0];
+            if (seg && rest.includes("/")) next.add(`assets/minecraft/textures/${seg}`);
+          }
+        }
+        return next;
+      });
+    }
+  }, [fileList]);
+
+  // ---- thumbnails for gallery (first 240 images only, recycled on pack change) ----
+  useEffect(() => {
+    const pngs = fileList.filter((p) => /\.png$/i.test(p)).slice(0, 240);
+    const m = new Map<string, string>();
+    for (const p of pngs) {
+      const bytes = files.get(p);
+      if (!bytes) continue;
+      try {
+        m.set(p, URL.createObjectURL(new Blob([bytes as BlobPart], { type: "image/png" })));
+      } catch { /* ignore */ }
+    }
+    setThumbUrls(m);
+    return () => {
+      for (const url of m.values()) URL.revokeObjectURL(url);
+    };
+  }, [files, fileList]);
+
+  // ---- revoke the single-file preview URL when it changes / unmounts (avoid blob leak) ----
+  useEffect(() => {
+    return () => {
+      if (previewUrl && previewUrl.startsWith("blob:")) {
+        try { URL.revokeObjectURL(previewUrl); } catch { /* ignore */ }
+      }
+    };
+  }, [previewUrl]);
 
   // ---- import ----
   const importBlob = useCallback(async (blob: Blob, name: string) => {
@@ -695,31 +743,121 @@ export default function ResourcePackPage() {
         {/* editor */}
         <section aria-label="Editor" className="flex min-h-[320px] min-w-0 flex-1 flex-col" style={{ background: "var(--bg)" }}>
           {!selected ? (
-            <div className="flex flex-1 flex-col gap-3 overflow-y-auto p-3">
-              <div>
-                <h2 className="mb-1 text-[13px] font-bold">pack.mcmeta</h2>
-                <textarea
-                  value={mcmetaText}
-                  onChange={(e) => { setMcmetaText(e.target.value); setMcmetaError(""); }}
-                  rows={9}
-                  spellCheck={false}
-                  aria-label="pack.mcmeta JSON"
-                  className="w-full rounded border p-2 font-mono text-[12px] outline-none"
-                  style={{ borderColor: "var(--border)", background: "var(--panel)" }}
-                />
-                {mcmetaError && <p className="mt-1 text-[12px]" style={{ color: "var(--danger)" }} role="alert">{mcmetaError}</p>}
-                <div className="mt-1.5">
-                  <Btn primary onClick={saveMcmeta}>
-                    <Save className="size-4" aria-hidden /> Save pack.mcmeta
-                  </Btn>
+            <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-3">
+              {/* Pack header: icon + meta, so user instantly knows it's a pack not a code file */}
+              <div className="flex items-center gap-3 rounded border p-3" style={{ borderColor: "var(--border)", background: "var(--panel)" }}>
+                {thumbUrls.get("pack.png") ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={thumbUrls.get("pack.png")!}
+                    alt="pack.png"
+                    width={56}
+                    height={56}
+                    className="shrink-0 rounded-sm border"
+                    style={{ imageRendering: "pixelated", borderColor: "var(--border)" }}
+                  />
+                ) : (
+                  <span className="grid size-14 place-items-center rounded-sm border" style={{ borderColor: "var(--border)", background: "var(--panel-2)", color: "var(--faint)" }}>
+                    <PackageOpen className="size-6" aria-hidden />
+                  </span>
+                )}
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[14px] font-bold">{packName}</div>
+                  <div className="truncate font-mono text-[11.5px]" style={{ color: "var(--muted)" }}>
+                    {mcmetaSummary.desc ?? "No description yet — select pack.mcmeta in the tree to edit."} · format {mcmetaSummary.format ?? "—"} · target {mcVersion}
+                  </div>
+                  <div className="mt-0.5 font-mono text-[11px]" style={{ color: "var(--faint)" }}>
+                    {files.size} files · {formatBytes(totalBytes)} · Click a thumbnail below to pixel-edit — never JSON.
+                  </div>
                 </div>
               </div>
-              <ol className="list-inside list-decimal space-y-0.5 text-[12.5px]" style={{ color: "var(--muted)" }}>
-                <li>Browse the tree on the left — right-click for actions.</li>
-                <li>Click a <span className="font-mono">.png</span> to pixel-edit it.</li>
-                <li>Click a <span className="font-mono">.json</span> model to validate + preview.</li>
-                <li>Shortcuts: <span className="font-mono">Ctrl+S</span> save · <span className="font-mono">Ctrl+E</span> export · <span className="font-mono">Del</span> delete.</li>
-              </ol>
+
+              {/* Textures gallery: the actual drawings — this is what user asked for */}
+              {(() => {
+                const pngs = fileList.filter((p) => /\.png$/i.test(p));
+                if (pngs.length === 0) {
+                  return (
+                    <EmptyState
+                      title="No images found"
+                      body="This pack contains no .png files. Add textures under assets/minecraft/textures/ and they'll appear here."
+                    />
+                  );
+                }
+                const showing = pngs.slice(0, 240);
+                const more = pngs.length - showing.length;
+                return (
+                  <div>
+                    <div className="mb-1.5 flex items-center gap-2">
+                      <h2 className="text-[12px] font-bold uppercase tracking-[0.08em]" style={{ color: "var(--faint)" }}>
+                        Textures · {pngs.length} drawings — click to edit
+                      </h2>
+                      <span className="ms-auto font-mono text-[11px]" style={{ color: "var(--faint)" }}>
+                        {more > 0 ? `showing 240 of ${pngs.length}` : `${pngs.length} images`}
+                      </span>
+                    </div>
+                    <ul className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(92px, 1fr))" }}>
+                      {showing.map((p) => (
+                        <li key={p}>
+                          <button
+                            onClick={() => void openPath(p)}
+                            title={`${p} — click to pixel-edit`}
+                            aria-label={`Edit ${baseOf(p)}`}
+                            className="ui-transition flex w-full flex-col items-center gap-1 rounded border p-2 text-center hover:opacity-90"
+                            style={{ borderColor: "var(--border)", background: "var(--panel)" }}
+                          >
+                            {thumbUrls.get(p) ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img
+                                src={thumbUrls.get(p)!}
+                                alt=""
+                                width={64}
+                                height={64}
+                                className="checker rounded-sm border"
+                                style={{ imageRendering: "pixelated", borderColor: "var(--border)", width: 64, height: 64, objectFit: "contain" }}
+                              />
+                            ) : (
+                              <span className="checker grid h-16 w-16 place-items-center rounded-sm border text-[10px]" style={{ borderColor: "var(--border)", color: "var(--faint)" }}>
+                                PNG
+                              </span>
+                            )}
+                            <span className="line-clamp-2 w-full break-all font-mono text-[10.5px] leading-tight">{baseOf(p)}</span>
+                            <span className="w-full truncate font-mono text-[10px]" style={{ color: "var(--faint)" }}>
+                              {p.replace(/^assets\/minecraft\/textures\//, "")}
+                            </span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                    <p className="mt-2 text-[11.5px]" style={{ color: "var(--muted)" }}>
+                      Tip: right-click any file in the tree for Rename / Duplicate / Delete. Press <span className="font-mono">Ctrl+S</span> in the pixel editor to save changes into the pack, then <span className="font-mono">Export</span> to get a new .zip.
+                    </p>
+                  </div>
+                );
+              })()}
+
+              {/* Compact meta editor is still available but not the focus — user must pick pack.mcmeta explicitly to edit JSON */}
+              <details className="rounded border p-2" style={{ borderColor: "var(--border)", background: "var(--panel)" }}>
+                <summary className="cursor-pointer list-inside text-[12px] font-semibold" style={{ color: "var(--muted)" }}>
+                  pack.mcmeta — JSON (only shown when you need it)
+                </summary>
+                <div className="mt-2">
+                  <textarea
+                    value={mcmetaText}
+                    onChange={(e) => { setMcmetaText(e.target.value); setMcmetaError(""); }}
+                    rows={7}
+                    spellCheck={false}
+                    aria-label="pack.mcmeta JSON"
+                    className="w-full rounded border p-2 font-mono text-[12px] outline-none"
+                    style={{ borderColor: "var(--border)", background: "var(--panel-2)" }}
+                  />
+                  {mcmetaError && <p className="mt-1 text-[12px]" style={{ color: "var(--danger)" }} role="alert">{mcmetaError}</p>}
+                  <div className="mt-1.5">
+                    <Btn primary onClick={saveMcmeta}>
+                      <Save className="size-4" aria-hidden /> Save pack.mcmeta
+                    </Btn>
+                  </div>
+                </div>
+              </details>
             </div>
           ) : (
             <div className="flex min-h-0 flex-1 flex-col">
@@ -740,19 +878,39 @@ export default function ResourcePackPage() {
                 </IconBtn>
               </div>
               <div className="min-h-0 flex-1 overflow-y-auto p-3">
-                {selIsPng && editingImg && imgDims && (
-                  <PixelEditor
-                    key={selected + editKey}
-                    ref={editorRef}
-                    width={imgDims[0]}
-                    height={imgDims[1]}
-                    initialImage={editingImg}
-                    showGridDefault={showGrid}
-                    onEdit={markDirty}
-                    onZoomChange={setZoom}
-                  />
-                )}
-                {(selIsJson || selected === "pack.mcmeta") && (
+                {selIsPng ? (
+                  // Drawings first — pixel-perfect editor, never JSON. Loading state while decoding.
+                  editingImg && imgDims ? (
+                    <PixelEditor
+                      key={selected + editKey}
+                      ref={editorRef}
+                      width={imgDims[0]}
+                      height={imgDims[1]}
+                      initialImage={editingImg}
+                      showGridDefault={showGrid}
+                      onEdit={markDirty}
+                      onZoomChange={setZoom}
+                    />
+                  ) : (
+                    <div className="flex flex-col items-center gap-3 py-8">
+                      {thumbUrls.get(selected ?? "") ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={thumbUrls.get(selected ?? "")!}
+                          alt={`Preview of ${selected}`}
+                          className="checker max-h-64 max-w-full rounded-sm border object-contain"
+                          style={{ imageRendering: "pixelated", borderColor: "var(--border)" }}
+                        />
+                      ) : (
+                        <span className="grid size-16 place-items-center rounded-sm border" style={{ borderColor: "var(--border)", color: "var(--faint)" }}>
+                          <ImageIcon className="size-6" aria-hidden />
+                        </span>
+                      )}
+                      <p className="text-[13px]" style={{ color: "var(--muted)" }}>Loading drawing…</p>
+                      <p className="font-mono text-[11.5px]" style={{ color: "var(--faint)" }}>{selected} · {formatBytes(files.get(selected ?? "")?.length ?? 0)}</p>
+                    </div>
+                  )
+                ) : (selIsJson || selected === "pack.mcmeta") ? (
                   <div className="grid min-h-full gap-3 xl:grid-cols-2">
                     <div className="flex min-w-0 flex-col">
                       <div className="mb-1 flex items-center gap-2">
@@ -786,28 +944,25 @@ export default function ResourcePackPage() {
                       {!parsedModel && <p className="mt-1 text-[12.5px]" style={{ color: "var(--danger)" }}>Invalid JSON — fix syntax to preview.</p>}
                     </div>
                   </div>
-                )}
-                {selIsAudio && (
+                ) : selIsAudio ? (
                   <div className="flex max-w-lg flex-col gap-2">
                     <dl className="grid grid-cols-[96px_1fr] gap-1 rounded border p-3 text-[12.5px]" style={{ borderColor: "var(--border)", background: "var(--panel)" }}>
                       <dt style={{ color: "var(--muted)" }}>Filename</dt><dd className="font-mono">{baseOf(selected)}</dd>
                       <dt style={{ color: "var(--muted)" }}>Size</dt><dd className="font-mono">{formatBytes(audioMeta?.size ?? 0)}</dd>
                       <dt style={{ color: "var(--muted)" }}>Format</dt><dd className="font-mono">{audioMeta?.format ?? "unknown"}</dd>
-                      <dt style={{ color: "var(--muted)" }}>Duration</dt><dd><DurationProbe url={soundUrls[selected] ?? previewUrl} /></dd>
+                      <dt style={{ color: "var(--muted)" }}>Duration</dt><dd><DurationProbe url={soundUrls[selected ?? ""] ?? previewUrl} /></dd>
                     </dl>
-                    {(soundUrls[selected] ?? previewUrl) && (
-                      <audio controls src={soundUrls[selected] ?? previewUrl} className="w-full" preload="metadata" />
+                    {(soundUrls[selected ?? ""] ?? previewUrl) && (
+                      <audio controls src={soundUrls[selected ?? ""] ?? previewUrl} className="w-full" preload="metadata" />
                     )}
                     <p className="text-[11.5px]" style={{ color: "var(--muted)" }}>Sounds are never converted — replace preserves bytes exactly.</p>
                   </div>
-                )}
-                {selIsText && (
+                ) : selIsText ? (
                   <div className="flex min-h-full flex-col">
                     <textarea value={modelText} onChange={(e) => setModelText(e.target.value)} rows={20} spellCheck={false} aria-label={`Edit ${selected}`} className="w-full flex-1 rounded border p-2 font-mono text-[12px] outline-none" style={{ borderColor: "var(--border)", background: "var(--panel)" }} />
                   </div>
-                )}
-                {!selIsPng && !selIsJson && !selIsAudio && !selIsText && selected !== "pack.mcmeta" && (
-                  <EmptyState title="Binary file" body={`${formatBytes(files.get(selected)?.length ?? 0)} — use Replace or Download.`} />
+                ) : (
+                  <EmptyState title="Binary file" body={`${formatBytes(files.get(selected ?? "")?.length ?? 0)} — use Replace or Download.`} />
                 )}
               </div>
             </div>
