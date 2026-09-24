@@ -38,6 +38,7 @@ export default function PixelArtPage() {
   // converter state
   const [srcImg, setSrcImg] = useState<HTMLImageElement | null>(null);
   const [res, setRes] = useState(48);
+  const [limitPalette, setLimitPalette] = useState(true);
   const [colorCount, setColorCount] = useState(16);
   const [paletteName, setPaletteName] = useState("minecraft");
   const [dither, setDither] = useState(false);
@@ -97,31 +98,34 @@ export default function PixelArtPage() {
         d[i + k] = clamp(Math.round(v), 0, 255);
       }
     }
-    // quantize to palette (limit count by slicing active palette honestly labeled custom)
-    const pal = activePalette.slice(0, Math.max(2, Math.min(64, colorCount)));
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        const i = (y * w + x) * 4;
-        const oldR = d[i], oldG = d[i + 1], oldB = d[i + 2];
-        const [nr, ng, nb] = nearest(oldR, oldG, oldB, pal);
-        d[i] = nr; d[i + 1] = ng; d[i + 2] = nb;
-        if (dither) {
-          const er = oldR - nr, eg = oldG - ng, eb = oldB - nb;
-          const spread = (dx: number, dy: number, f: number) => {
-            const nx = x + dx, ny = y + dy;
-            if (nx < 0 || ny < 0 || nx >= w || ny >= h) return;
-            const j = (ny * w + nx) * 4;
-            d[j] = clamp(d[j] + er * f, 0, 255);
-            d[j + 1] = clamp(d[j + 1] + eg * f, 0, 255);
-            d[j + 2] = clamp(d[j + 2] + eb * f, 0, 255);
-          };
-          spread(1, 0, 7 / 16); spread(-1, 1, 3 / 16); spread(0, 1, 5 / 16); spread(1, 1, 1 / 16);
+    if (limitPalette) {
+      // true palette — nearest color per pixel, honest quantization
+      const pal = activePalette.slice(0, Math.max(2, Math.min(64, colorCount)));
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          const i = (y * w + x) * 4;
+          const oldR = d[i], oldG = d[i + 1], oldB = d[i + 2];
+          const [nr, ng, nb] = nearest(oldR, oldG, oldB, pal);
+          d[i] = nr; d[i + 1] = ng; d[i + 2] = nb;
+          if (dither) {
+            const er = oldR - nr, eg = oldG - ng, eb = oldB - nb;
+            const spread = (dx: number, dy: number, f: number) => {
+              const nx = x + dx, ny = y + dy;
+              if (nx < 0 || ny < 0 || nx >= w || ny >= h) return;
+              const j = (ny * w + nx) * 4;
+              d[j] = clamp(d[j] + er * f, 0, 255);
+              d[j + 1] = clamp(d[j + 1] + eg * f, 0, 255);
+              d[j + 2] = clamp(d[j + 2] + eb * f, 0, 255);
+            };
+            spread(1, 0, 7 / 16); spread(-1, 1, 3 / 16); spread(0, 1, 5 / 16); spread(1, 1, 1 / 16);
+          }
         }
       }
     }
+    // if limitPalette is off we keep true original colors (only resize + brightness/contrast)
     ctx.putImageData(img, 0, 0);
     setPreviewUrl(c.toDataURL("image/png"));
-  }, [srcImg, res, colorCount, activePalette, dither, bright, contrast, notify]);
+  }, [srcImg, res, limitPalette, colorCount, activePalette, dither, bright, contrast, notify]);
 
   const useAsCanvas = useCallback(async () => {
     if (!previewUrl) return;
@@ -253,23 +257,26 @@ export default function PixelArtPage() {
                 <label>Resolution: <span className="font-mono font-bold">{res}px</span>
                   <input type="range" min={8} max={128} value={res} onChange={(e) => setRes(+e.target.value)} className={rangeCls} style={rangeStyle} />
                 </label>
-                <label>Colors: <span className="font-mono font-bold">{colorCount}</span>
-                  <input type="range" min={2} max={32} value={colorCount} onChange={(e) => setColorCount(+e.target.value)} className={rangeCls} style={rangeStyle} />
+                <label className="flex items-center gap-1.5 font-semibold">
+                  <input type="checkbox" checked={limitPalette} onChange={(e) => setLimitPalette(e.target.checked)} style={rangeStyle} /> Limit to palette (false = true original colors)
                 </label>
-                <label>Palette:
-                  <select value={paletteName} onChange={(e) => setPaletteName(e.target.value)} className="mt-1 w-full rounded border px-2 py-1.5" style={{ borderColor: "var(--border)", background: "var(--panel)" }}>
+                <label className={limitPalette ? "" : "opacity-40"}>Colors: <span className="font-mono font-bold">{colorCount}</span>
+                  <input type="range" min={2} max={32} value={colorCount} onChange={(e) => setColorCount(+e.target.value)} className={rangeCls} style={rangeStyle} disabled={!limitPalette} />
+                </label>
+                <label className={limitPalette ? "" : "opacity-40"}>Palette:
+                  <select value={paletteName} onChange={(e) => setPaletteName(e.target.value)} className="mt-1 w-full rounded border px-2 py-1.5" style={{ borderColor: "var(--border)", background: "var(--panel)" }} disabled={!limitPalette}>
                     <option value="minecraft">Minecraft-ish (custom, not official)</option>
                     <option value="grayscale">Grayscale</option>
                     {palettes.map((p) => <option key={p.name} value={p.name}>{p.name} (custom)</option>)}
                   </select>
                 </label>
-                <div className="flex flex-wrap gap-1" aria-label="Active palette swatches">
+                <div className={`flex flex-wrap gap-1 ${limitPalette ? "" : "opacity-40"}`} aria-label="Active palette swatches">
                   {activePalette.slice(0, colorCount).map((c) => (
                     <span key={c} title={c} className="size-5 rounded-sm border border-black/20" style={{ background: c }} />
                   ))}
                 </div>
-                <label className="flex items-center gap-1.5">
-                  <input type="checkbox" checked={dither} onChange={(e) => setDither(e.target.checked)} style={rangeStyle} /> Floyd–Steinberg dithering
+                <label className={`flex items-center gap-1.5 ${limitPalette ? "" : "opacity-40"}`}>
+                  <input type="checkbox" checked={dither} onChange={(e) => setDither(e.target.checked)} style={rangeStyle} disabled={!limitPalette} /> Floyd–Steinberg dithering
                 </label>
                 <label>Brightness: <span className="font-mono">{bright}</span>
                   <input type="range" min={-80} max={80} value={bright} onChange={(e) => setBright(+e.target.value)} className={rangeCls} style={rangeStyle} />
@@ -283,7 +290,7 @@ export default function PixelArtPage() {
                 </div>
                 {previewUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img src={previewUrl} alt="Pixel art conversion preview" className="w-full rounded border" style={{ borderColor: "var(--border)", imageRendering: "pixelated" }} />
+                  <img src={previewUrl} alt="Pixel art conversion preview" className="pixel w-full rounded border" style={{ borderColor: "var(--border)" }} />
                 ) : (
                   <p className="text-[12px]" style={{ color: "var(--muted)" }}>Load an image and press Convert — preview appears here before export.</p>
                 )}

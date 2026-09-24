@@ -100,33 +100,41 @@ export const PixelEditor = React.forwardRef<PixelEditorHandle, Props>(function P
     const src = dataRef.current;
     const view = viewRef.current;
     if (!src || !view) return;
+    const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
+    const cssW = width * zoom;
+    const cssH = height * zoom;
+    // backing store sized for DPR so retina stays razor-sharp
+    view.width = Math.round(cssW * dpr);
+    view.height = Math.round(cssH * dpr);
+    view.style.width = `${cssW}px`;
+    view.style.height = `${cssH}px`;
     const vctx = view.getContext("2d")!;
+    vctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     vctx.imageSmoothingEnabled = false;
-    view.width = width * zoom;
-    view.height = height * zoom;
-    // checkerboard for transparency
+    // checkerboard for transparency — drawn at CSS pixels so pattern stays consistent
     vctx.fillStyle = "#ffffff";
-    vctx.fillRect(0, 0, view.width, view.height);
+    vctx.fillRect(0, 0, cssW, cssH);
     vctx.fillStyle = "#d4d4d4";
     const cell = Math.max(zoom / 2, 4);
-    for (let y = 0; y < view.height; y += cell * 2) {
-      for (let x = 0; x < view.width; x += cell * 2) {
+    for (let y = 0; y < cssH; y += cell * 2) {
+      for (let x = 0; x < cssW; x += cell * 2) {
         vctx.fillRect(x, y, cell, cell);
         vctx.fillRect(x + cell, y + cell, cell, cell);
       }
     }
-    vctx.drawImage(src, 0, 0, view.width, view.height);
+    // true pixel — nearest-neighbor only, true colors, alpha kept
+    vctx.drawImage(src, 0, 0, cssW, cssH);
     if (grid && zoom >= 4) {
       vctx.strokeStyle = "rgba(0,0,0,0.22)";
       vctx.lineWidth = 1;
       vctx.beginPath();
       for (let x = 0; x <= width; x++) {
         vctx.moveTo(x * zoom + 0.5, 0);
-        vctx.lineTo(x * zoom + 0.5, view.height);
+        vctx.lineTo(x * zoom + 0.5, cssH);
       }
       for (let y = 0; y <= height; y++) {
         vctx.moveTo(0, y * zoom + 0.5);
-        vctx.lineTo(view.width, y * zoom + 0.5);
+        vctx.lineTo(cssW, y * zoom + 0.5);
       }
       vctx.stroke();
     }
@@ -417,8 +425,8 @@ export const PixelEditor = React.forwardRef<PixelEditorHandle, Props>(function P
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
           onPointerLeave={onPointerUp}
-          className="mx-auto block max-w-none cursor-crosshair touch-none rounded-sm"
-          style={{ imageRendering: "pixelated", boxShadow: "var(--shadow-pop)" }}
+          className="pixel mx-auto block max-w-none cursor-crosshair touch-none rounded-sm"
+          style={{ boxShadow: "var(--shadow-pop)" }}
           role="application"
           aria-label={`Pixel canvas ${width} by ${height}`}
         />

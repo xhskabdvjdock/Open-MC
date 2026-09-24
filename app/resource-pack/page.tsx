@@ -69,6 +69,31 @@ function fileIcon(path: string): React.ElementType {
   return FileIcon;
 }
 
+// True-pixel thumbnail — real PNG bytes, no palette, no blur, DPR-aware via crisp-edges
+function PngThumb({ bytes, alt, size = 64 }: { bytes: Uint8Array; alt: string; size?: number }) {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    const blob = new Blob([bytes as unknown as BlobPart], { type: "image/png" });
+    const u = URL.createObjectURL(blob);
+    setUrl(u);
+    return () => URL.revokeObjectURL(u);
+  }, [bytes]);
+  if (!url) {
+    return <span className="checker grid place-items-center rounded-sm border" style={{ width: size, height: size, borderColor: "var(--border)", color: "var(--faint)", fontSize: 10 }}>…</span>;
+  }
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={url}
+      alt={alt}
+      width={size}
+      height={size}
+      className="pixel checker rounded-sm border object-contain"
+      style={{ width: size, height: size, imageRendering: "pixelated", borderColor: "var(--border)" }}
+    />
+  );
+}
+
 export default function ResourcePackPage() {
   const { notify, mcVersion, autosave, showGrid, setProject } = useApp();
   const [packName, setPackName] = useState("MyPack");
@@ -95,7 +120,6 @@ export default function ResourcePackPage() {
   const [propsW, setPropsW] = useState(248);
   const [quickReport, setQuickReport] = useState<string | null>(null);
   const [isDesktop, setIsDesktop] = useState(false);
-  const [thumbUrls, setThumbUrls] = useState<Map<string, string>>(new Map());
   const editorRef = useRef<PixelEditorHandle>(null);
   const zipInput = useRef<HTMLInputElement>(null);
   const addInput = useRef<HTMLInputElement>(null);
@@ -140,23 +164,6 @@ export default function ResourcePackPage() {
       });
     }
   }, [fileList]);
-
-  // ---- thumbnails for gallery (first 240 images only, recycled on pack change) ----
-  useEffect(() => {
-    const pngs = fileList.filter((p) => /\.png$/i.test(p)).slice(0, 240);
-    const m = new Map<string, string>();
-    for (const p of pngs) {
-      const bytes = files.get(p);
-      if (!bytes) continue;
-      try {
-        m.set(p, URL.createObjectURL(new Blob([bytes as BlobPart], { type: "image/png" })));
-      } catch { /* ignore */ }
-    }
-    setThumbUrls(m);
-    return () => {
-      for (const url of m.values()) URL.revokeObjectURL(url);
-    };
-  }, [files, fileList]);
 
   // ---- revoke the single-file preview URL when it changes / unmounts (avoid blob leak) ----
   useEffect(() => {
@@ -746,16 +753,8 @@ export default function ResourcePackPage() {
             <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-3">
               {/* Pack header: icon + meta, so user instantly knows it's a pack not a code file */}
               <div className="flex items-center gap-3 rounded border p-3" style={{ borderColor: "var(--border)", background: "var(--panel)" }}>
-                {thumbUrls.get("pack.png") ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={thumbUrls.get("pack.png")!}
-                    alt="pack.png"
-                    width={56}
-                    height={56}
-                    className="shrink-0 rounded-sm border"
-                    style={{ imageRendering: "pixelated", borderColor: "var(--border)" }}
-                  />
+                {files.get("pack.png") ? (
+                  <PngThumb bytes={files.get("pack.png")!} alt="pack.png" size={56} />
                 ) : (
                   <span className="grid size-14 place-items-center rounded-sm border" style={{ borderColor: "var(--border)", background: "var(--panel-2)", color: "var(--faint)" }}>
                     <PackageOpen className="size-6" aria-hidden />
@@ -796,37 +795,32 @@ export default function ResourcePackPage() {
                       </span>
                     </div>
                     <ul className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(92px, 1fr))" }}>
-                      {showing.map((p) => (
-                        <li key={p}>
-                          <button
-                            onClick={() => void openPath(p)}
-                            title={`${p} — click to pixel-edit`}
-                            aria-label={`Edit ${baseOf(p)}`}
-                            className="ui-transition flex w-full flex-col items-center gap-1 rounded border p-2 text-center hover:opacity-90"
-                            style={{ borderColor: "var(--border)", background: "var(--panel)" }}
-                          >
-                            {thumbUrls.get(p) ? (
-                              // eslint-disable-next-line @next/next/no-img-element
-                              <img
-                                src={thumbUrls.get(p)!}
-                                alt=""
-                                width={64}
-                                height={64}
-                                className="checker rounded-sm border"
-                                style={{ imageRendering: "pixelated", borderColor: "var(--border)", width: 64, height: 64, objectFit: "contain" }}
-                              />
-                            ) : (
-                              <span className="checker grid h-16 w-16 place-items-center rounded-sm border text-[10px]" style={{ borderColor: "var(--border)", color: "var(--faint)" }}>
-                                PNG
+                      {showing.map((p) => {
+                        const b = files.get(p);
+                        return (
+                          <li key={p}>
+                            <button
+                              onClick={() => void openPath(p)}
+                              title={`${p} — click to pixel-edit • true colors • alpha kept`}
+                              aria-label={`Edit ${baseOf(p)}`}
+                              className="ui-transition flex w-full flex-col items-center gap-1 rounded border p-2 text-center hover:opacity-90"
+                              style={{ borderColor: "var(--border)", background: "var(--panel)" }}
+                            >
+                              {b ? (
+                                <PngThumb bytes={b} alt="" size={64} />
+                              ) : (
+                                <span className="checker grid h-16 w-16 place-items-center rounded-sm border text-[10px]" style={{ borderColor: "var(--border)", color: "var(--faint)" }}>
+                                  PNG
+                                </span>
+                              )}
+                              <span className="line-clamp-2 w-full break-all font-mono text-[10.5px] leading-tight">{baseOf(p)}</span>
+                              <span className="w-full truncate font-mono text-[10px]" style={{ color: "var(--faint)" }}>
+                                {p.replace(/^assets\/minecraft\/textures\//, "")}
                               </span>
-                            )}
-                            <span className="line-clamp-2 w-full break-all font-mono text-[10.5px] leading-tight">{baseOf(p)}</span>
-                            <span className="w-full truncate font-mono text-[10px]" style={{ color: "var(--faint)" }}>
-                              {p.replace(/^assets\/minecraft\/textures\//, "")}
-                            </span>
-                          </button>
-                        </li>
-                      ))}
+                            </button>
+                          </li>
+                        );
+                      })}
                     </ul>
                     <p className="mt-2 text-[11.5px]" style={{ color: "var(--muted)" }}>
                       Tip: right-click any file in the tree for Rename / Duplicate / Delete. Press <span className="font-mono">Ctrl+S</span> in the pixel editor to save changes into the pack, then <span className="font-mono">Export</span> to get a new .zip.
@@ -893,20 +887,22 @@ export default function ResourcePackPage() {
                     />
                   ) : (
                     <div className="flex flex-col items-center gap-3 py-8">
-                      {thumbUrls.get(selected ?? "") ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img
-                          src={thumbUrls.get(selected ?? "")!}
-                          alt={`Preview of ${selected}`}
-                          className="checker max-h-64 max-w-full rounded-sm border object-contain"
-                          style={{ imageRendering: "pixelated", borderColor: "var(--border)" }}
-                        />
-                      ) : (
-                        <span className="grid size-16 place-items-center rounded-sm border" style={{ borderColor: "var(--border)", color: "var(--faint)" }}>
-                          <ImageIcon className="size-6" aria-hidden />
-                        </span>
-                      )}
-                      <p className="text-[13px]" style={{ color: "var(--muted)" }}>Loading drawing…</p>
+                      {(() => {
+                        const b = files.get(selected ?? "");
+                        if (!b) {
+                          return (
+                            <span className="grid size-16 place-items-center rounded-sm border" style={{ borderColor: "var(--border)", color: "var(--faint)" }}>
+                              <ImageIcon className="size-6" aria-hidden />
+                            </span>
+                          );
+                        }
+                        return (
+                          <span className="checker inline-grid place-items-center rounded-sm border p-2" style={{ borderColor: "var(--border)" }}>
+                            <PngThumb bytes={b} alt={`Preview of ${selected}`} size={Math.min(256, Math.max(64, imgDims ? imgDims[0] * 4 : 128))} />
+                          </span>
+                        );
+                      })()}
+                      <p className="text-[13px]" style={{ color: "var(--muted)" }}>Loading true-pixel drawing…</p>
                       <p className="font-mono text-[11.5px]" style={{ color: "var(--faint)" }}>{selected} · {formatBytes(files.get(selected ?? "")?.length ?? 0)}</p>
                     </div>
                   )

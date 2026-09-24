@@ -261,7 +261,7 @@ export default function TexturesPage() {
           </h2>
           {url && canvas ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={url} alt="Texture being edited" className="max-h-[520px] w-auto max-w-full rounded-sm border" style={{ imageRendering: "pixelated", borderColor: "var(--border)" }} />
+            <img src={url} alt="Texture being edited" className="pixel max-h-[520px] w-auto max-w-full rounded-sm border" style={{ borderColor: "var(--border)" }} />
           ) : (
             <p className="py-10 text-center text-[13px]" style={{ color: "var(--muted)" }}>Drop an image above to begin.</p>
           )}
